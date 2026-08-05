@@ -1,3 +1,5 @@
+import { dailyPriceBand, phaseLabel, stockTickSize, type KoreanMarket, type MarketPhase, type VenueId } from "./koreanMarketRules";
+
 export type Side = "BUY" | "SELL";
 export type OrderType = "LIMIT" | "MARKET";
 export type TimeInForce = "GTC" | "IOC" | "FOK";
@@ -11,6 +13,10 @@ export interface InstrumentConfig {
   minPrice: number;
   maxPrice: number;
   maxOrderQuantity: number;
+  market?: KoreanMarket;
+  venue?: VenueId;
+  basePrice?: number;
+  dailyPriceLimitPercent?: number;
 }
 
 export interface Order {
@@ -67,6 +73,14 @@ export interface BookSnapshot {
   bidLevels: BookLevel[];
   askLevels: BookLevel[];
   sequence: number;
+  phase: MarketPhase;
+}
+
+export interface MarketState {
+  venue: VenueId;
+  phase: MarketPhase;
+  label: string;
+  sequence: number;
 }
 
 export type EngineEvent =
@@ -75,7 +89,8 @@ export type EngineEvent =
   | { type: "EXECUTION"; sequence: number; execution: Execution }
   | { type: "ORDER_CANCELLED"; sequence: number; order: Order; reason: string }
   | { type: "ORDER_REPLACED"; sequence: number; oldOrderId: string; newOrder: Order; emittedAt: string }
-  | { type: "SELF_TRADE_PREVENTED"; sequence: number; takerOrderId: string; makerOrderId: string; policy: SelfTradePolicy; emittedAt: string };
+  | { type: "SELF_TRADE_PREVENTED"; sequence: number; takerOrderId: string; makerOrderId: string; policy: SelfTradePolicy; emittedAt: string }
+  | { type: "MARKET_STATE_CHANGED"; sequence: number; venue: VenueId; phase: MarketPhase; emittedAt: string };
 
 export interface SubmitOrderResult {
   accepted: boolean;
@@ -118,12 +133,24 @@ export class MatchingEngine {
   private readonly eventLog: EngineEvent[] = [];
   private readonly listeners = new Set<Listener>();
   private sequence = 0;
+  private marketPhase: MarketPhase = "CONTINUOUS";
 
   constructor(
     private readonly selfTradePolicy: SelfTradePolicy = "CANCEL_TAKER",
     instruments: InstrumentConfig[] = [],
+    private readonly venue: VenueId = "NEXTRADE",
   ) {
     for (const instrument of instruments) this.registerInstrument(instrument);
+  }
+
+  setMarketPhase(phase: MarketPhase): void {
+    if (phase === this.marketPhase) return;
+    this.marketPhase = phase;
+    this.emit({ type: "MARKET_STATE_CHANGED", sequence: this.nextSequence(), venue: this.venue, phase, emittedAt: nowIso() });
+  }
+
+  getMarketState(): MarketState {
+    return { venue: this.venue, phase: this.marketPhase, label: phaseLabel(this.marketPhase), sequence: this.sequence };
   }
 
   registerInstrument(config: InstrumentConfig): void {
@@ -273,6 +300,7 @@ export class MatchingEngine {
       bidLevels: this.aggregateLevels(bids),
       askLevels: this.aggregateLevels(asks),
       sequence: this.sequence,
+      phase: this.marketPhase,
     };
   }
 
@@ -315,6 +343,7 @@ export class MatchingEngine {
 
   private validate(input: SubmitOrderInput, timeInForce: TimeInForce): string | undefined {
     if (!input.id || !input.symbol || !input.participantId?.trim()) return "id, symbol, participantId are required";
+    if (this.marketPhase === "CLOSED") return "market is closed";
     if (input.side !== "BUY" && input.side !== "SELL") return "side must be BUY or SELL";
     if (input.type !== "LIMIT" && input.type !== "MARKET") return "type must be LIMIT or MARKET";
     if (!["GTC", "IOC", "FOK"].includes(timeInForce)) return "unsupported time in force";
@@ -323,10 +352,17 @@ export class MatchingEngine {
     if (input.quantity > instrument.maxOrderQuantity) return `quantity exceeds max ${instrument.maxOrderQuantity}`;
     if (input.type === "LIMIT") {
       if (!Number.isSafeInteger(input.price) || (input.price as number) < instrument.minPrice || (input.price as number) > instrument.maxPrice) return "limit price is outside the configured band";
-      if ((input.price as number) % instrument.tickSize !== 0) return `price must be a multiple of ${instrument.tickSize}`;
+      const tickSize = instrument.market ? stockTickSize(input.price as number, instrument.market) : instrument.tickSize;
+      if ((input.price as number) % tickSize !== 0) return `price must be a multiple of ${tickSize}`;
+      if (instrument.basePrice) {
+        const band = dailyPriceBand(instrument.basePrice, instrument.dailyPriceLimitPercent ?? 30);
+        if ((input.price as number) < band.lower || (input.price as number) > band.upper) return `price must be within ${band.lower}-${band.upper}`;
+      }
     }
     if (input.type === "MARKET" && input.price != null) return "market order cannot include a price";
     if (input.type === "MARKET" && timeInForce === "GTC") return "market order must be IOC or FOK";
+    if ((this.marketPhase === "OPENING_AUCTION" || this.marketPhase === "CLOSING_AUCTION") && timeInForce !== "GTC") return "IOC/FOK are not accepted during auction phases";
+    if ((this.marketPhase === "PRE_MARKET" || this.marketPhase === "AFTER_MARKET") && input.type === "MARKET") return "market orders are disabled in off-hours phases";
     return undefined;
   }
 

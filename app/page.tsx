@@ -2,9 +2,11 @@
 
 import { useMemo, useState, type FormEvent } from "react";
 import { MatchingEngine, type EngineEvent, type Execution, type Order, type OrderType, type Side, type TimeInForce } from "../engine/matchingEngine";
+import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
 
 const SYMBOL = "005930";
 const DISPLAY_NAME = "삼성전자";
+const VENUE = "NEXTRADE" as const;
 const INSTRUMENT = {
   symbol: SYMBOL,
   tickSize: 100,
@@ -12,6 +14,10 @@ const INSTRUMENT = {
   minPrice: 100,
   maxPrice: 10_000_000,
   maxOrderQuantity: 1_000_000,
+  market: "KOSPI" as const,
+  venue: VENUE,
+  basePrice: 70000,
+  dailyPriceLimitPercent: 30,
 };
 
 const formatNumber = (value: number) => new Intl.NumberFormat("ko-KR").format(value);
@@ -26,6 +32,7 @@ export default function Home() {
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [trades, setTrades] = useState<Execution[]>([]);
   const [events, setEvents] = useState<EngineEvent[]>([]);
+  const [marketPhase, setMarketPhase] = useState<MarketPhase>("CONTINUOUS");
   const [side, setSide] = useState<Side>("BUY");
   const [orderType, setOrderType] = useState<OrderType>("LIMIT");
   const [timeInForce, setTimeInForce] = useState<TimeInForce>("GTC");
@@ -89,6 +96,35 @@ export default function Home() {
     setMessage(`${orderId} 취소 완료`);
   }
 
+  function cancelAllOrders() {
+    const openOrders = orders.filter((order) => order.status === "OPEN" || order.status === "PARTIAL");
+    if (!openOrders.length) {
+      setMessage("취소할 미체결 주문이 없습니다");
+      return;
+    }
+    if (!window.confirm(`${openOrders.length}건의 미체결 주문을 모두 취소할까요?`)) return;
+    const cancelled = new Map<string, Order>();
+    for (const order of openOrders) {
+      const result = engine.cancel(order.id, order.participantId, "BULK_CANCEL");
+      if (result.cancelled && result.order) cancelled.set(order.id, result.order);
+    }
+    setOrders((current) => current.map((order) => {
+      const updated = cancelled.get(order.id);
+      return updated ? { ...order, ...updated, filled: updated.quantity - updated.remaining } : order;
+    }));
+    setEvents(engine.getEvents().slice(-80));
+    refresh();
+    setMessage(`${cancelled.size}건 일괄취소 완료`);
+  }
+
+  function changeMarketPhase(nextPhase: MarketPhase) {
+    engine.setMarketPhase(nextPhase);
+    setMarketPhase(nextPhase);
+    setEvents(engine.getEvents().slice(-80));
+    refresh();
+    setMessage(`${phaseLabel(nextPhase)} phase selected · local venue control`);
+  }
+
   function resetEngine() {
     const nextEngine = new MatchingEngine("CANCEL_TAKER", [INSTRUMENT]);
     setEngine(nextEngine);
@@ -96,25 +132,26 @@ export default function Home() {
     setOrders([]);
     setTrades([]);
     setEvents([]);
+    setMarketPhase("CONTINUOUS");
     setMessage("엔진 상태 초기화 · 입력 대기 중");
   }
 
   return (
     <main className="terminal-shell">
       <aside className="side-rail">
-        <div className="brand-mark">N<span>+</span></div>
+        <div className="brand-mark">S<span>TS</span></div>
         <nav className="rail-nav" aria-label="주요 메뉴">
-          <button className="rail-item active" aria-label="매매체결"><span className="rail-icon">⌁</span><span>체결</span></button>
-          <button className="rail-item" aria-label="주문관리"><span className="rail-icon">◫</span><span>주문</span></button>
-          <button className="rail-item" aria-label="리스크관리"><span className="rail-icon">⌁</span><span>리스크</span></button>
-          <button className="rail-item" aria-label="관제"><span className="rail-icon">◌</span><span>관제</span></button>
+          <button className="rail-item active" aria-label="Matching"><span className="rail-icon">⌁</span><span>Match</span></button>
+          <button className="rail-item" aria-label="Orders"><span className="rail-icon">◫</span><span>Orders</span></button>
+          <button className="rail-item" aria-label="Risk"><span className="rail-icon">⌁</span><span>Risk</span></button>
+          <button className="rail-item" aria-label="Monitor"><span className="rail-icon">◌</span><span>Monitor</span></button>
         </nav>
         <div className="rail-bottom"><button className="rail-item" aria-label="설정"><span className="rail-icon">⚙</span><span>설정</span></button><div className="user-avatar">OP</div></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumb"><span className="eyebrow">NXT / MATCHING CORE</span><span className="crumb-divider">/</span><strong>매매체결 운영 콘솔</strong></div>
+          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / MATCHING CORE</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
           <div className="top-actions"><div className="market-state"><span className="tiny-dot amber" /> 엔진 실행 · 시장데이터 피드 대기</div><div className="header-chip"><span className="tiny-dot green" /> LOCAL CORE</div></div>
         </header>
 
@@ -127,7 +164,9 @@ export default function Home() {
 
           <section className="feed-warning"><span className="warning-icon">!</span><div><strong>시장데이터 게이트웨이가 연결되지 않았습니다.</strong><span>현재 화면은 실거래소 시세를 생성하거나 대체하지 않습니다. 아래 주문 입력은 엔진 규칙을 검증하기 위한 수동 주문만 받습니다.</span></div></section>
 
-          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>INSTRUMENT</span><strong>{SYMBOL} · TICK {formatNumber(INSTRUMENT.tickSize)}원</strong></div><div><span>STATE JOURNAL</span><strong>APPEND-ONLY · SEQ {formatNumber(book.sequence)}</strong></div><div className="profile-lock"><span className="tiny-dot green" /> ORDER GATE OPEN</div></section>
+          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>VENUE PROFILE</span><strong>NEXTRADE ATS · KOSPI</strong></div><div><span>STATE JOURNAL</span><strong>APPEND-ONLY · SEQ {formatNumber(book.sequence)}</strong></div><div className="profile-lock"><span className={`tiny-dot ${marketPhase === "CLOSED" ? "amber" : "green"}`} /> {marketPhase === "CLOSED" ? "ORDER GATE CLOSED" : "ORDER GATE OPEN"}</div></section>
+
+          <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">VENUE SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>NEXTRADE · local control plane</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
 
           <section className="kpi-row" aria-label="엔진 상태">
             <div className="kpi-card"><span className="kpi-label">엔진 상태</span><strong className="status-text">READY</strong><span className="kpi-trend">seq {formatNumber(book.sequence)}</span></div>
@@ -178,8 +217,8 @@ export default function Home() {
             </section>
           </div>
 
-          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : "시장가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={12} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
-          <footer className="page-footer"><span>매매체결 코어 · 수동 주문 검증 모드</span><span><span className="tiny-dot amber" /> MARKET DATA DISCONNECTED</span></footer>
+          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : "시장가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={12} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
+          <footer className="page-footer"><span>TradingStockSysyem · manual core verification mode</span><span><span className="tiny-dot amber" /> MARKET DATA DISCONNECTED</span></footer>
         </div>
       </section>
     </main>

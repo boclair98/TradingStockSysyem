@@ -71,3 +71,11 @@ test("instrument rules reject off-tick prices and emit an audit event", () => {
   assert.match(result.reason ?? "", /multiple of 100/);
   assert.equal(engine.getEvents()[0]?.type, "ORDER_REJECTED");
 });
+
+test("venue phase gate and daily band are enforced before matching", () => {
+  const engine = new MatchingEngine("CANCEL_TAKER", [{ symbol: "005930", tickSize: 100, lotSize: 1, minPrice: 100, maxPrice: 10_000_000, maxOrderQuantity: 1_000, market: "KOSPI", venue: "NEXTRADE", basePrice: 70000 }], "NEXTRADE");
+  engine.setMarketPhase("CLOSED");
+  assert.equal(engine.submit({ id: "B-CLOSED", symbol: "005930", participantId: "P1", side: "BUY", type: "LIMIT", price: 70000, quantity: 1 }).reason, "market is closed");
+  engine.setMarketPhase("CONTINUOUS");
+  assert.match(engine.submit({ id: "B-BAND", symbol: "005930", participantId: "P1", side: "BUY", type: "LIMIT", price: 92000, quantity: 1 }).reason ?? "", /within 49000-91000/);
+});

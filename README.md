@@ -106,6 +106,12 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 감사 이벤트를 제공합니다. 실제 거래소 연결 시 이 모듈을 서버 프로세스로 옮기고
 인증·사전 위험관리·저널 영속화·복구·시장데이터/주문 게이트웨이를 앞뒤에 추가해야 합니다.
 
+한국시장 프로파일은 `engine/koreanMarketRules.ts`에 분리했습니다. KOSPI/KOSDAQ
+가격대별 호가단위, 기준가 대비 가격범위, KRX 시가·정규·종가 세션, NEXTRADE
+프리/메인/애프터 세션, 그리고 `engine/smartOrderRouter.ts`의 KRX/NEXTRADE
+최우선 체결 후보 선택을 API 없이 검증할 수 있습니다. 시간·휴장일·종목별
+거래가능 여부는 운영 API와 거래소 공시를 연결할 때 반드시 최신 값으로 주입해야 합니다.
+
 배포 전 체크리스트:
 
 1. Coders 인증을 완료하고 토큰을 `.coders/token`에 저장합니다. 이 파일은 커밋하지 않습니다.

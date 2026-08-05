@@ -173,5 +173,18 @@ h2 { margin: 7px 0 0; font-size: 15px; letter-spacing: -.03em; }
 
 .status-pill.rejected { color: var(--red); background: rgba(251,114,126,.1); }
 .tif-pill { color: var(--violet); background: rgba(169,152,255,.1); border-radius: 4px; padding: 4px 6px; font-size: 9px; }
+.danger-button { border: 1px solid rgba(251,114,126,.24); border-radius: 8px; background: rgba(251,114,126,.08); color: var(--red); padding: 9px 12px; font-size: 11px; }
+.danger-button:hover { border-color: rgba(251,114,126,.5); background: rgba(251,114,126,.14); }
+.phase-control { display: flex; align-items: center; justify-content: space-between; gap: 16px; border: 1px solid var(--line); border-radius: 10px; background: rgba(20,22,28,.92); padding: 12px 14px; margin-bottom: 15px; }
+.phase-control > div:first-child { min-width: 190px; }
+.phase-control strong { display: block; margin-top: 4px; color: #e7f3f1; font-size: 13px; }
+.phase-control small { display: block; margin-top: 4px; color: var(--muted-2); font-size: 9px; }
+.phase-buttons { display: flex; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
+.phase-buttons button { border: 1px solid var(--line); border-radius: 6px; background: #101217; color: var(--muted-2); padding: 7px 9px; font-size: 9px; font-weight: 700; letter-spacing: .03em; }
+.phase-buttons button:hover { color: var(--ink); border-color: #47515d; }
+.phase-buttons button.active { color: #0b2525; background: var(--cyan); border-color: var(--cyan); }
+.phase-buttons button.closed { color: var(--red); }
+.phase-buttons button.closed.active { color: #260a0e; background: var(--red); border-color: var(--red); }
+@media (max-width: 760px) { .phase-control { align-items: flex-start; flex-direction: column; }.phase-buttons { justify-content: flex-start; } }
 @media (max-width: 1020px) { .engine-profile { grid-template-columns: 1fr 1fr; }.engine-profile > div:nth-child(2) { border-right: 0; }.engine-profile > div:nth-child(3), .engine-profile > div:nth-child(4) { border-top: 1px solid rgba(88,212,209,.12); }.engine-profile .profile-lock { justify-content: flex-start; } }
 @media (max-width: 760px) { .engine-profile { grid-template-columns: 1fr; }.engine-profile > div { border-right: 0; border-bottom: 1px solid rgba(88,212,209,.12); }.engine-profile > div:last-child { border-bottom: 0; } }
