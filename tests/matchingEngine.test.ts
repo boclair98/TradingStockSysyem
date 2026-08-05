@@ -79,3 +79,17 @@ test("venue phase gate and daily band are enforced before matching", () => {
   engine.setMarketPhase("CONTINUOUS");
   assert.match(engine.submit({ id: "B-BAND", symbol: "005930", participantId: "P1", side: "BUY", type: "LIMIT", price: 92000, quantity: 1 }).reason ?? "", /within 49000-91000/);
 });
+
+test("opening auction queues orders and uncrosses at one clearing price", () => {
+  const engine = new MatchingEngine("CANCEL_TAKER", [{ symbol: "005930", tickSize: 100, lotSize: 1, minPrice: 100, maxPrice: 10_000_000, maxOrderQuantity: 1_000 }], "NEXTRADE");
+  engine.setMarketPhase("OPENING_AUCTION");
+  const bid = engine.submit({ id: "B-AUC", symbol: "005930", participantId: "BUYER", side: "BUY", type: "LIMIT", price: 10100, quantity: 10 });
+  const ask = engine.submit({ id: "S-AUC", symbol: "005930", participantId: "SELLER", side: "SELL", type: "LIMIT", price: 10000, quantity: 5 });
+  assert.equal(bid.executions.length, 0);
+  assert.equal(ask.executions.length, 0);
+  const auction = engine.runAuction("005930");
+  assert.equal(auction.price, 10100);
+  assert.equal(auction.quantity, 5);
+  assert.equal(engine.getOrder("B-AUC")?.status, "PARTIAL");
+  assert.equal(engine.getOrder("S-AUC")?.status, "FILLED");
+});

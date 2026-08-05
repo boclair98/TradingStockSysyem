@@ -90,13 +90,22 @@ export type EngineEvent =
   | { type: "ORDER_CANCELLED"; sequence: number; order: Order; reason: string }
   | { type: "ORDER_REPLACED"; sequence: number; oldOrderId: string; newOrder: Order; emittedAt: string }
   | { type: "SELF_TRADE_PREVENTED"; sequence: number; takerOrderId: string; makerOrderId: string; policy: SelfTradePolicy; emittedAt: string }
-  | { type: "MARKET_STATE_CHANGED"; sequence: number; venue: VenueId; phase: MarketPhase; emittedAt: string };
+  | { type: "MARKET_STATE_CHANGED"; sequence: number; venue: VenueId; phase: MarketPhase; emittedAt: string }
+  | { type: "AUCTION_EXECUTED"; sequence: number; symbol: string; price: number; quantity: number; emittedAt: string };
 
 export interface SubmitOrderResult {
   accepted: boolean;
   order: Order | null;
   executions: Execution[];
   reason?: string;
+}
+
+export interface AuctionResult {
+  symbol: string;
+  price: number | null;
+  quantity: number;
+  executions: Execution[];
+  sequence: number;
 }
 
 export interface CancelResult {
@@ -203,6 +212,13 @@ export class MatchingEngine {
       return { accepted: true, order: cloneOrder(order), executions: [], reason: "FOK_NOT_FILLED" };
     }
 
+    if (this.isAuctionPhase()) {
+      this.addToBook(book, order);
+      order.status = "OPEN";
+      order.lastUpdatedAt = nowIso();
+      return { accepted: true, order: cloneOrder(order), executions: [] };
+    }
+
     const executions: Execution[] = [];
     for (const maker of this.sortedOpposite(book, order.side)) {
       if (order.remaining === 0 || !this.crosses(order, maker)) break;
@@ -255,6 +271,66 @@ export class MatchingEngine {
       }
     }
     return { accepted: true, order: cloneOrder(order), executions };
+  }
+
+  runAuction(symbol: string): AuctionResult {
+    if (!this.isAuctionPhase()) return { symbol, price: null, quantity: 0, executions: [], sequence: this.sequence };
+    const book = this.getBook(symbol);
+    const bids = this.sorted(book.bids, "BUY").filter((order) => order.price != null);
+    const asks = this.sorted(book.asks, "SELL").filter((order) => order.price != null);
+    const candidates = [...new Set([...bids, ...asks].map((order) => order.price as number))].sort((a, b) => a - b);
+    if (!candidates.length) return { symbol, price: null, quantity: 0, executions: [], sequence: this.sequence };
+
+    const instrument = this.instrument(symbol);
+    const reference = instrument.basePrice ?? candidates[Math.floor(candidates.length / 2)];
+    let clearingPrice = candidates[0];
+    let clearingQuantity = -1;
+    for (const candidate of candidates) {
+      const bidQuantity = bids.filter((order) => (order.price as number) >= candidate).reduce((sum, order) => sum + order.remaining, 0);
+      const askQuantity = asks.filter((order) => (order.price as number) <= candidate).reduce((sum, order) => sum + order.remaining, 0);
+      const executable = Math.min(bidQuantity, askQuantity);
+      const betterTie = Math.abs(candidate - reference) < Math.abs(clearingPrice - reference) || (Math.abs(candidate - reference) === Math.abs(clearingPrice - reference) && candidate < clearingPrice);
+      if (executable > clearingQuantity || (executable === clearingQuantity && betterTie)) {
+        clearingQuantity = executable;
+        clearingPrice = candidate;
+      }
+    }
+    if (clearingQuantity <= 0) return { symbol, price: null, quantity: 0, executions: [], sequence: this.sequence };
+
+    const executions: Execution[] = [];
+    let bidIndex = 0;
+    let askIndex = 0;
+    while (bidIndex < bids.length && askIndex < asks.length) {
+      const bid = bids[bidIndex];
+      const ask = asks[askIndex];
+      if ((bid.price as number) < clearingPrice || (ask.price as number) > clearingPrice) break;
+      const quantity = Math.min(bid.remaining, ask.remaining);
+      bid.remaining -= quantity;
+      ask.remaining -= quantity;
+      const maker = bid.sequence < ask.sequence ? bid : ask;
+      const taker = maker.id === bid.id ? ask : bid;
+      const execution: Execution = {
+        id: `E-${String(this.nextSequence()).padStart(12, "0")}`,
+        symbol,
+        price: clearingPrice,
+        quantity,
+        buyOrderId: bid.id,
+        sellOrderId: ask.id,
+        makerOrderId: maker.id,
+        takerOrderId: taker.id,
+        sequence: this.sequence,
+        executedAt: nowIso(),
+      };
+      executions.push(execution);
+      this.emit({ type: "EXECUTION", sequence: execution.sequence, execution });
+      if (bid.remaining === 0) { bid.status = "FILLED"; this.removeFromBook(book, bid); bidIndex += 1; } else bid.status = "PARTIAL";
+      if (ask.remaining === 0) { ask.status = "FILLED"; this.removeFromBook(book, ask); askIndex += 1; } else ask.status = "PARTIAL";
+      bid.lastUpdatedAt = nowIso();
+      ask.lastUpdatedAt = nowIso();
+    }
+    const quantity = executions.reduce((sum, execution) => sum + execution.quantity, 0);
+    if (quantity > 0) this.emit({ type: "AUCTION_EXECUTED", sequence: this.nextSequence(), symbol, price: clearingPrice, quantity, emittedAt: nowIso() });
+    return { symbol, price: quantity > 0 ? clearingPrice : null, quantity, executions, sequence: this.sequence };
   }
 
   cancel(orderId: string, participantId?: string, reason = "USER_REQUEST"): CancelResult {
@@ -362,6 +438,7 @@ export class MatchingEngine {
     if (input.type === "MARKET" && input.price != null) return "market order cannot include a price";
     if (input.type === "MARKET" && timeInForce === "GTC") return "market order must be IOC or FOK";
     if ((this.marketPhase === "OPENING_AUCTION" || this.marketPhase === "CLOSING_AUCTION") && timeInForce !== "GTC") return "IOC/FOK are not accepted during auction phases";
+    if (this.isAuctionPhase() && input.type === "MARKET") return "market orders require an auction uncross adapter in this core";
     if ((this.marketPhase === "PRE_MARKET" || this.marketPhase === "AFTER_MARKET") && input.type === "MARKET") return "market orders are disabled in off-hours phases";
     return undefined;
   }
@@ -416,6 +493,10 @@ export class MatchingEngine {
 
   private emitCancelled(order: Order, reason: string): void {
     this.emit({ type: "ORDER_CANCELLED", sequence: this.nextSequence(), order: cloneOrder(order), reason });
+  }
+
+  private isAuctionPhase(): boolean {
+    return this.marketPhase === "OPENING_AUCTION" || this.marketPhase === "CLOSING_AUCTION";
   }
 
   private nextSequence(): number {

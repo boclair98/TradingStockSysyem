@@ -185,6 +185,8 @@ h2 { margin: 7px 0 0; font-size: 15px; letter-spacing: -.03em; }
 .phase-buttons button.active { color: #0b2525; background: var(--cyan); border-color: var(--cyan); }
 .phase-buttons button.closed { color: var(--red); }
 .phase-buttons button.closed.active { color: #260a0e; background: var(--red); border-color: var(--red); }
+.phase-buttons button.auction-run { color: var(--amber); border-color: rgba(232,174,88,.35); }
+.phase-buttons button.auction-run:disabled { opacity: .35; cursor: not-allowed; }
 @media (max-width: 760px) { .phase-control { align-items: flex-start; flex-direction: column; }.phase-buttons { justify-content: flex-start; } }
 @media (max-width: 1020px) { .engine-profile { grid-template-columns: 1fr 1fr; }.engine-profile > div:nth-child(2) { border-right: 0; }.engine-profile > div:nth-child(3), .engine-profile > div:nth-child(4) { border-top: 1px solid rgba(88,212,209,.12); }.engine-profile .profile-lock { justify-content: flex-start; } }
 @media (max-width: 760px) { .engine-profile { grid-template-columns: 1fr; }.engine-profile > div { border-right: 0; border-bottom: 1px solid rgba(88,212,209,.12); }.engine-profile > div:last-child { border-bottom: 0; } }

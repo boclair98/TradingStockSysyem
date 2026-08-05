@@ -125,6 +125,14 @@ export default function Home() {
     setMessage(`${phaseLabel(nextPhase)} phase selected · local venue control`);
   }
 
+  function runAuctionCycle() {
+    const result = engine.runAuction(SYMBOL);
+    if (result.executions.length) setTrades((current) => [...result.executions, ...current].slice(0, 50));
+    setEvents(engine.getEvents().slice(-80));
+    refresh();
+    setMessage(result.price == null ? "동시호가에서 체결 가능한 수량이 없습니다" : `단일가 ${formatNumber(result.price)}원 · ${formatNumber(result.quantity)}주 체결`);
+  }
+
   function resetEngine() {
     const nextEngine = new MatchingEngine("CANCEL_TAKER", [INSTRUMENT]);
     setEngine(nextEngine);
@@ -166,7 +174,7 @@ export default function Home() {
 
           <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>VENUE PROFILE</span><strong>NEXTRADE ATS · KOSPI</strong></div><div><span>STATE JOURNAL</span><strong>APPEND-ONLY · SEQ {formatNumber(book.sequence)}</strong></div><div className="profile-lock"><span className={`tiny-dot ${marketPhase === "CLOSED" ? "amber" : "green"}`} /> {marketPhase === "CLOSED" ? "ORDER GATE CLOSED" : "ORDER GATE OPEN"}</div></section>
 
-          <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">VENUE SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>NEXTRADE · local control plane</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
+          <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">VENUE SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>NEXTRADE · local control plane</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className="auction-run" onClick={runAuctionCycle} disabled={marketPhase !== "OPENING_AUCTION" && marketPhase !== "CLOSING_AUCTION"}>RUN AUCTION</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
 
           <section className="kpi-row" aria-label="엔진 상태">
             <div className="kpi-card"><span className="kpi-label">엔진 상태</span><strong className="status-text">READY</strong><span className="kpi-trend">seq {formatNumber(book.sequence)}</span></div>
