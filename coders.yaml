@@ -1,0 +1,9 @@
+version: "1"
+mode: native
+services:
+  web:
+    dockerfile: Dockerfile
+    context: .
+    port: 3000
+    expose: public
+    timeout: 3600

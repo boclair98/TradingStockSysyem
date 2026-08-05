@@ -94,6 +94,26 @@ actions tied to the current ChatGPT user. Leave public content anonymous.
 - `npm test`: build the starter and verify its rendered loading skeleton
 - `npm run db:generate`: generate Drizzle migrations after schema changes
 
+## coders.kr 준비 상태
+
+이 프로젝트는 coders.kr의 단일 `web` 서비스로 패키징할 수 있도록 `coders.yaml`과
+`Dockerfile`을 포함합니다. 화면은 외부 시장데이터를 수신하지 않는 코어 검증 콘솔이며,
+사용자가 입력한 주문만 브라우저 세션의 매칭엔진에서 처리합니다. 외부 주문 라우팅과
+영속 저장은 의도적으로 연결하지 않았습니다.
+
+`engine/matchingEngine.ts`는 가격·시간 우선, 지정가/시장가, GTC/IOC/FOK,
+상품별 호가단위·수량 규칙, 자기체결 방지, 취소/정정, 집계 호가, append-only
+감사 이벤트를 제공합니다. 실제 거래소 연결 시 이 모듈을 서버 프로세스로 옮기고
+인증·사전 위험관리·저널 영속화·복구·시장데이터/주문 게이트웨이를 앞뒤에 추가해야 합니다.
+
+배포 전 체크리스트:
+
+1. Coders 인증을 완료하고 토큰을 `.coders/token`에 저장합니다. 이 파일은 커밋하지 않습니다.
+2. `coders.yaml`의 서비스 빌드가 통과하는지 확인합니다.
+3. 실제 시세·주문 API를 붙일 때는 WebSocket 재연결, 사용자 인증, 주문 권한 검사를 서버에 추가합니다.
+
+현재 Coders 배포본은 개인 확인용 콘솔이며, 실거래소 시세나 주문을 생성하지 않습니다.
+
 ## Learn More
 
 - [vinext Documentation](https://github.com/cloudflare/vinext)
