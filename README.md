@@ -1,126 +1,117 @@
-# vinext-starter
+# TradingStockSysyem
 
-A clean full-stack starter running on
-[vinext](https://github.com/cloudflare/vinext), with optional Cloudflare D1 and
-Drizzle support.
+국내 주식시장과 대체거래소(ATS) 환경을 가정한 매매체결 시스템 연구·검증 프로젝트입니다.
+가격·시간 우선 매칭엔진과 한국시장 세션 규칙을 브라우저 운영 콘솔에서 확인할 수 있으며,
+현재는 외부 거래소 API 없이 가상 주문만 처리합니다.
 
-## Prerequisites
+> **중요:** 이 프로젝트는 실거래소나 증권계좌에 연결되어 있지 않습니다. 현재 입력되는 주문과
+> 호가는 검증을 위한 로컬/가상 데이터이며, 실제 주문·청산·결제를 수행하지 않습니다.
 
-- Node.js `>=22.13.0`
+## 공개 데모
 
-## Quick Start
+- [TradingStockSysyem 운영 콘솔](https://tradingstocksysyem.coders.kr/)
+
+화면 상단의 종목 선택기에서 삼성전자, SK하이닉스, NAVER, 현대차, 카카오, KODEX 200을
+가상 종목으로 전환할 수 있습니다. 종목별로 호가창, 주문 입력, 체결 이벤트가 분리됩니다.
+
+## 주요 기능
+
+- 가격·시간 우선(price/time priority) 매칭
+- 지정가·시장가 주문
+- GTC·IOC·FOK 유효조건
+- 주문 취소·정정 및 미체결 전체취소
+- `CANCEL_TAKER` 자기체결 방지 정책
+- 집계 호가창과 append-only 체결/감사 이벤트
+- 개장·종가 동시호가와 단일가 경매(uncrossing)
+- NEXTRADE ATS 세션 상태와 주문 게이트
+- KOSPI/KOSDAQ 가격대별 호가단위와 가격제한폭 검증
+- KRX/NEXTRADE 후보 호가를 비교하는 결정론적 SOR 함수
+- API 연결 전 검증을 위한 다중 가상 종목 마스터
+
+## 구성
+
+```text
+app/page.tsx                    운영 콘솔 UI와 종목 선택/주문 입력
+engine/matchingEngine.ts        주문원장, 검증, 매칭, 경매, 이벤트 로그
+engine/koreanMarketRules.ts    한국시장 호가단위·세션·가격범위 규칙
+engine/smartOrderRouter.ts      KRX/NEXTRADE 최우선 후보 선택 로직
+tests/                          매칭엔진·한국시장 규칙 테스트
+coders.yaml                     coders.kr web 서비스 설정
+Dockerfile                      재현 가능한 컨테이너 빌드
+```
+
+## 로컬 실행
+
+요구사항: Node.js `>=22.13.0`
 
 ```bash
 npm install
 npm run dev
-npm run build
 ```
 
-This starter does not use `wrangler.jsonc`.
+개발 서버는 기본적으로 `http://localhost:3000`에서 실행됩니다.
 
-## Included Shape
+## 검증 명령
 
-- edit site code under `app/`
-- `.openai/hosting.json` declares optional Sites D1 and R2 bindings
-- `vite.config.ts` simulates declared bindings for local development
-- `db/schema.ts` starts intentionally empty
-- `examples/d1/` contains an optional D1 example surface
-- `drizzle.config.ts` supports local migration generation when needed
+```bash
+npm run build
+npx eslint app/page.tsx engine/matchingEngine.ts
+```
 
-## Workspace Auth Headers
+매칭엔진 테스트는 `tests/matchingEngine.test.ts`, 한국시장 규칙 테스트는
+`tests/koreanMarketRules.test.ts`에 있습니다.
 
-Signed-in visitors receive both `oai-authenticated-user-id` and `oai-authenticated-user-email`. Private Sites require every visitor to sign in; public Sites may also have anonymous visitors, for whom neither header is present.
+## API 연결 전후의 경계
 
-The user ID is stable for the same user on the same Site and different across Sites. Email and name are intended for display or contact purposes.
+현재 엔진은 전송 계층과 분리된 순수 매칭 코어입니다. 실제 서비스를 준비할 때는 다음
+어댑터를 별도 서버 계층으로 연결해야 합니다.
 
-SIWC-authenticated workspace sites may also receive
-`oai-authenticated-user-full-name` when the user's SIWC profile has a non-empty
-`name` claim. The full-name value is percent-encoded UTF-8 and is accompanied by
-`oai-authenticated-user-full-name-encoding: percent-encoded-utf-8`.
+1. 실시간 시장데이터 수신(WebSocket/FIX 등)
+2. 주문 제출·취소·정정 게이트웨이(FIX/전용 API 등)
+3. 사용자 인증·계좌·잔고·권한 검사
+4. 사전 리스크 검사와 주문 한도
+5. 체결 저널 영속화, 장애 복구, 시간 동기화
+6. 청산·결제·감사 및 거래소 운영 연계
 
-Treat the full name as optional and fall back to email when it is absent:
+API가 연결되기 전에는 현재의 가상 피드와 수동 주문 입력으로 매칭 규칙, 세션 전환,
+경매, 자기체결 방지, 오류 처리를 반복 검증할 수 있습니다. 실거래에 사용하려면 거래소/
+증권사 연동, 운영 이중화, 보안·감사 체계와 별도 적합성 검토가 필요합니다.
 
-```tsx
-import { headers } from "next/headers";
+## 배포
 
-export default async function Home() {
-  const requestHeaders = await headers();
-  const userId = requestHeaders.get("oai-authenticated-user-id");
-  const email = requestHeaders.get("oai-authenticated-user-email");
-  const encodedFullName = requestHeaders.get("oai-authenticated-user-full-name");
-  const fullName =
-    encodedFullName &&
-    requestHeaders.get("oai-authenticated-user-full-name-encoding") ===
-      "percent-encoded-utf-8"
-      ? decodeURIComponent(encodedFullName)
-      : null;
+`coders.yaml`과 `Dockerfile`은 coders.kr의 `web` 서비스 배포를 위한 설정입니다.
+배포 토큰이나 API 키는 저장소에 커밋하지 말고 호스팅 환경의 비밀값으로 관리해야 합니다.
 
-  const displayName = fullName ?? email;
-  // ...
+## API 준비 상태
+
+배포본은 아래의 paper API를 제공합니다. 모든 주문은 현재 프로세스의 가상 매칭엔진에서만
+처리되며 `live: true` 요청은 의도적으로 거부됩니다.
+
+```text
+GET    /api/health
+GET    /api/readiness
+GET    /api/instruments
+GET    /api/book?symbol=005930
+GET    /api/orders
+POST   /api/orders
+DELETE /api/orders/{orderId}?participantId=api-paper
+```
+
+주문 제출 예시:
+
+```json
+{
+  "symbol": "005930",
+  "participantId": "sandbox-user",
+  "side": "BUY",
+  "type": "LIMIT",
+  "timeInForce": "GTC",
+  "price": 70000,
+  "quantity": 10
 }
 ```
 
-## Optional Dispatch-Owned ChatGPT Sign-In
-
-Import the ready-to-use helpers from `app/chatgpt-auth.ts` when the site needs
-optional or required ChatGPT sign-in:
-
-- Use `getChatGPTUser()` for optional signed-in UI.
-- Use `requireChatGPTUser(returnTo)` for server-rendered pages that should send
-  anonymous visitors through Sign in with ChatGPT.
-- Use `chatGPTSignInPath(returnTo)` and `chatGPTSignOutPath(returnTo)` for
-  browser links or actions.
-- Pass a same-origin relative `returnTo` path for the destination after sign-in
-  or sign-out. The helper validates and safely encodes it.
-- Mark protected pages with `export const dynamic = "force-dynamic"` because
-  they depend on per-request identity headers.
-
-Dispatch owns `/signin-with-chatgpt`, `/signout-with-chatgpt`, `/callback`, the
-OAuth cookies, and identity header injection. Do not implement app routes for
-those reserved paths. Routes that do not import and call the helper remain
-anonymous-compatible.
-
-SIWC establishes identity only; it does not prove workspace membership. Use the
-Sites hosting platform's access policy controls for workspace-wide restrictions,
-or enforce explicit server-side membership or allowlist checks.
-
-Use SIWC for account pages, user-specific dashboards, saved records, and write
-actions tied to the current ChatGPT user. Leave public content anonymous.
-
-## Useful Commands
-
-- `npm run dev`: start local development
-- `npm run build`: verify the vinext build output
-- `npm test`: build the starter and verify its rendered loading skeleton
-- `npm run db:generate`: generate Drizzle migrations after schema changes
-
-## coders.kr 준비 상태
-
-이 프로젝트는 coders.kr의 단일 `web` 서비스로 패키징할 수 있도록 `coders.yaml`과
-`Dockerfile`을 포함합니다. 화면은 외부 시장데이터를 수신하지 않는 코어 검증 콘솔이며,
-사용자가 입력한 주문만 브라우저 세션의 매칭엔진에서 처리합니다. 외부 주문 라우팅과
-영속 저장은 의도적으로 연결하지 않았습니다.
-
-`engine/matchingEngine.ts`는 가격·시간 우선, 지정가/시장가, GTC/IOC/FOK,
-상품별 호가단위·수량 규칙, 자기체결 방지, 취소/정정, 집계 호가, append-only
-감사 이벤트를 제공합니다. 실제 거래소 연결 시 이 모듈을 서버 프로세스로 옮기고
-인증·사전 위험관리·저널 영속화·복구·시장데이터/주문 게이트웨이를 앞뒤에 추가해야 합니다.
-
-한국시장 프로파일은 `engine/koreanMarketRules.ts`에 분리했습니다. KOSPI/KOSDAQ
-가격대별 호가단위, 기준가 대비 가격범위, KRX 시가·정규·종가 세션, NEXTRADE
-프리/메인/애프터 세션, 그리고 `engine/smartOrderRouter.ts`의 KRX/NEXTRADE
-최우선 체결 후보 선택을 API 없이 검증할 수 있습니다. 시간·휴장일·종목별
-거래가능 여부는 운영 API와 거래소 공시를 연결할 때 반드시 최신 값으로 주입해야 합니다.
-
-배포 전 체크리스트:
-
-1. Coders 인증을 완료하고 토큰을 `.coders/token`에 저장합니다. 이 파일은 커밋하지 않습니다.
-2. `coders.yaml`의 서비스 빌드가 통과하는지 확인합니다.
-3. 실제 시세·주문 API를 붙일 때는 WebSocket 재연결, 사용자 인증, 주문 권한 검사를 서버에 추가합니다.
-
-현재 Coders 배포본은 개인 확인용 콘솔이며, 실거래소 시세나 주문을 생성하지 않습니다.
-
-## Learn More
-
-- [vinext Documentation](https://github.com/cloudflare/vinext)
-- [Drizzle D1 Guide](https://orm.drizzle.team/docs/get-started/d1-new)
+`GET /api/readiness`는 실제 NEXTRADE 연동에 필요한 환경변수의 존재 여부만 알려주며,
+비밀값 자체는 반환하지 않습니다. 현재 `NEXTRADE_MODE`의 기본값은 `disabled`입니다.
+실제 어댑터를 활성화하기 전에는 NEXTRADE 참가 증권사의 공식 sandbox 접속 사양,
+시세/주문 프로토콜, conformance test, 인증정보가 필요합니다.

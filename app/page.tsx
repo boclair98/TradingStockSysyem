@@ -3,22 +3,10 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { MatchingEngine, type EngineEvent, type Execution, type Order, type OrderType, type Side, type TimeInForce } from "../engine/matchingEngine";
 import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
+import { instrumentFor, NEXTRADE_INSTRUMENTS as INSTRUMENTS } from "../engine/instrumentMaster";
 
-const SYMBOL = "005930";
-const DISPLAY_NAME = "삼성전자";
-const VENUE = "NEXTRADE" as const;
-const INSTRUMENT = {
-  symbol: SYMBOL,
-  tickSize: 100,
-  lotSize: 1,
-  minPrice: 100,
-  maxPrice: 10_000_000,
-  maxOrderQuantity: 1_000_000,
-  market: "KOSPI" as const,
-  venue: VENUE,
-  basePrice: 70000,
-  dailyPriceLimitPercent: 30,
-};
+const DEFAULT_SYMBOL = INSTRUMENTS[0].symbol;
+const instrumentFor = (symbol: string) => INSTRUMENTS.find((instrument) => instrument.symbol === symbol) ?? INSTRUMENTS[0];
 
 const formatNumber = (value: number) => new Intl.NumberFormat("ko-KR").format(value);
 const formatPrice = (value: number | null) => value == null ? "—" : `${formatNumber(value)}원`;
@@ -27,8 +15,9 @@ const nowStamp = () => new Date().toLocaleTimeString("ko-KR", { hour12: false })
 type OrderRow = Order & { filled: number; submittedAt: string };
 
 export default function Home() {
-  const [engine, setEngine] = useState(() => new MatchingEngine("CANCEL_TAKER", [INSTRUMENT]));
-  const [book, setBook] = useState(() => engine.snapshot(SYMBOL));
+  const [selectedSymbol, setSelectedSymbol] = useState(DEFAULT_SYMBOL);
+  const [engine, setEngine] = useState(() => new MatchingEngine("CANCEL_TAKER", INSTRUMENTS));
+  const [book, setBook] = useState(() => engine.snapshot(DEFAULT_SYMBOL));
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [trades, setTrades] = useState<Execution[]>([]);
   const [events, setEvents] = useState<EngineEvent[]>([]);
@@ -36,24 +25,35 @@ export default function Home() {
   const [side, setSide] = useState<Side>("BUY");
   const [orderType, setOrderType] = useState<OrderType>("LIMIT");
   const [timeInForce, setTimeInForce] = useState<TimeInForce>("GTC");
-  const [price, setPrice] = useState("70000");
+  const [price, setPrice] = useState(String(INSTRUMENTS[0].basePrice));
   const [quantity, setQuantity] = useState("1");
   const [participantId, setParticipantId] = useState("operator");
   const [message, setMessage] = useState("주문 입력을 기다리는 중");
   const [activeTab, setActiveTab] = useState<"orders" | "trades">("orders");
 
+  const selectedInstrument = instrumentFor(selectedSymbol);
+  const visibleTrades = trades.filter((trade) => trade.symbol === selectedSymbol);
+
   const bestAsk = book.askLevels[0]?.price ?? null;
   const bestBid = book.bidLevels[0]?.price ?? null;
   const spread = bestAsk != null && bestBid != null ? bestAsk - bestBid : null;
-  const lastTrade = trades[0]?.price ?? null;
+  const lastTrade = visibleTrades[0]?.price ?? null;
   const totalBid = book.bidLevels.reduce((sum, level) => sum + level.quantity, 0);
   const totalAsk = book.askLevels.reduce((sum, level) => sum + level.quantity, 0);
   const maxDepth = Math.max(...[...book.askLevels, ...book.bidLevels].map((level) => level.quantity), 1);
   const sortedAsks = useMemo(() => book.askLevels, [book.askLevels]);
   const sortedBids = useMemo(() => book.bidLevels, [book.bidLevels]);
 
-  function refresh(nextEngine = engine) {
-    setBook(nextEngine.snapshot(SYMBOL));
+  function refresh(nextEngine = engine, symbol = selectedSymbol) {
+    setBook(nextEngine.snapshot(symbol));
+  }
+
+  function selectInstrument(symbol: string) {
+    const nextInstrument = instrumentFor(symbol);
+    setSelectedSymbol(nextInstrument.symbol);
+    setPrice(String(nextInstrument.basePrice ?? ""));
+    setBook(engine.snapshot(nextInstrument.symbol));
+    setMessage(`${nextInstrument.displayName} · ${nextInstrument.symbol} 원장 선택`);
   }
 
   function submitOrder(event: FormEvent<HTMLFormElement>) {
@@ -62,7 +62,7 @@ export default function Home() {
     const parsedQuantity = Number(quantity);
     const result = engine.submit({
       id: `${side === "BUY" ? "B" : "S"}-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-      symbol: SYMBOL,
+      symbol: selectedSymbol,
       participantId: participantId.trim() || "operator",
       side,
       type: orderType,
@@ -126,7 +126,7 @@ export default function Home() {
   }
 
   function runAuctionCycle() {
-    const result = engine.runAuction(SYMBOL);
+    const result = engine.runAuction(selectedSymbol);
     if (result.executions.length) setTrades((current) => [...result.executions, ...current].slice(0, 50));
     setEvents(engine.getEvents().slice(-80));
     refresh();
@@ -134,9 +134,9 @@ export default function Home() {
   }
 
   function resetEngine() {
-    const nextEngine = new MatchingEngine("CANCEL_TAKER", [INSTRUMENT]);
+    const nextEngine = new MatchingEngine("CANCEL_TAKER", INSTRUMENTS);
     setEngine(nextEngine);
-    setBook(nextEngine.snapshot(SYMBOL));
+    setBook(nextEngine.snapshot(selectedSymbol));
     setOrders([]);
     setTrades([]);
     setEvents([]);
@@ -165,7 +165,8 @@ export default function Home() {
 
         <div className="content">
           <div className="instrument-bar">
-            <div className="instrument-title"><div className="ticker-icon">S</div><div><div className="instrument-name">{DISPLAY_NAME} <span className="ticker">{SYMBOL} · KRX</span></div><div className="instrument-sub">호가창 · 주문원장 · 체결 이벤트</div></div></div>
+            <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">호가창 · 주문원장 · 체결 이벤트</div></div></div>
+            <div className="instrument-selector"><label htmlFor="instrument-select">종목 선택</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>가상 종목 마스터 · {INSTRUMENTS.length}종목</span></div>
             <div className="quote-block"><span className="quote-label">최근 체결</span><strong>{formatPrice(lastTrade)}</strong><span className="muted">외부 피드 없음</span></div>
             <div className="instrument-actions"><span className="api-status"><span className="tiny-dot amber" /> 시장데이터 미연결</span><button className="ghost-button" onClick={resetEngine}>엔진 초기화</button></div>
           </div>
@@ -180,7 +181,7 @@ export default function Home() {
             <div className="kpi-card"><span className="kpi-label">엔진 상태</span><strong className="status-text">READY</strong><span className="kpi-trend">seq {formatNumber(book.sequence)}</span></div>
             <div className="kpi-card"><span className="kpi-label">활성 매수 잔량</span><strong>{formatNumber(totalBid)}<span className="unit">주</span></strong><span className="kpi-trend">{book.bids.length}개 주문</span></div>
             <div className="kpi-card"><span className="kpi-label">활성 매도 잔량</span><strong>{formatNumber(totalAsk)}<span className="unit">주</span></strong><span className="kpi-trend">{book.asks.length}개 주문</span></div>
-            <div className="kpi-card"><span className="kpi-label">누적 체결 이벤트</span><strong>{formatNumber(trades.length)}<span className="unit">건</span></strong><span className="kpi-trend">현재 세션</span></div>
+            <div className="kpi-card"><span className="kpi-label">누적 체결 이벤트</span><strong>{formatNumber(visibleTrades.length)}<span className="unit">건</span></strong><span className="kpi-trend">{selectedInstrument.displayName}</span></div>
           </section>
 
           <div className="dashboard-grid">
@@ -192,8 +193,8 @@ export default function Home() {
               <form onSubmit={submitOrder}>
                 <label className="field-label">참가자 ID <span>필수</span></label>
                 <div className="number-input"><input aria-label="참가자 ID" type="text" value={participantId} onChange={(event) => setParticipantId(event.target.value)} /></div>
-                <label className="field-label">가격 <span>KRW</span></label>
-                <div className={`number-input ${orderType === "MARKET" ? "disabled" : ""}`}><input aria-label="주문 가격" type="number" step="100" min="1" value={price} disabled={orderType === "MARKET"} onChange={(event) => setPrice(event.target.value)} /><span>원</span></div>
+                <label className="field-label">가격 <span>KRW · 호가단위 {formatNumber(selectedInstrument.tickSize)}원</span></label>
+                <div className={`number-input ${orderType === "MARKET" ? "disabled" : ""}`}><input aria-label="주문 가격" type="number" step={selectedInstrument.tickSize} min={selectedInstrument.minPrice} value={price} disabled={orderType === "MARKET"} onChange={(event) => setPrice(event.target.value)} /><span>원</span></div>
                 <div className="quick-prices"><button type="button" onClick={() => setPrice(String(bestAsk ?? 0))}>최우선 매도</button><button type="button" onClick={() => setPrice(String(bestBid ?? 0))}>최우선 매수</button></div>
                 <label className="field-label">수량 <span>주</span></label>
                 <div className="number-input"><input aria-label="주문 수량" type="number" step="1" min="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /><span>주</span></div>
@@ -220,12 +221,12 @@ export default function Home() {
               <div className="panel-heading"><div><span className="section-kicker">EXECUTION LOG</span><h2>체결 이벤트</h2></div><span className="time-badge">LOCAL</span></div>
               <div className="feed-state-card"><span className="feed-state-icon">↯</span><div><strong>외부 체결 피드 미연결</strong><span>실제 거래소 체결은 표시되지 않습니다.</span></div></div>
               <div className="activity-tabs"><button className={activeTab === "orders" ? "active" : ""} onClick={() => setActiveTab("orders")}>주문 이벤트</button><button className={activeTab === "trades" ? "active" : ""} onClick={() => setActiveTab("trades")}>최근 체결</button></div>
-              {activeTab === "trades" ? <div className="trade-list">{trades.length ? trades.slice(0, 10).map((trade) => <div className="trade-row" key={trade.id}><span className="buy-color">체결</span><strong>{formatNumber(trade.price)}</strong><span>{formatNumber(trade.quantity)}주</span><time>seq {trade.sequence}</time></div>) : <div className="empty-activity">체결 이벤트가 없습니다.</div>}</div> : <div className="event-list">{events.length ? events.slice(-6).reverse().map((event) => <div className="event-row" key={`${event.type}-${event.sequence}`}><span className={`event-icon ${event.type === "EXECUTION" ? "green" : event.type === "ORDER_REJECTED" ? "amber" : "blue"}`}>{event.type === "EXECUTION" ? "✓" : event.type === "ORDER_CANCELLED" ? "×" : event.type === "SELF_TRADE_PREVENTED" ? "!" : "↗"}</span><div><strong>{event.type === "EXECUTION" ? "체결 이벤트" : event.type === "ORDER_ACCEPTED" ? "주문 접수" : event.type === "ORDER_CANCELLED" ? "주문 취소" : event.type === "SELF_TRADE_PREVENTED" ? "자기체결 방지" : event.type === "ORDER_REJECTED" ? "주문 거부" : "주문 정정"}</strong><span>{event.type === "EXECUTION" ? `${formatNumber(event.execution.price)}원 · ${formatNumber(event.execution.quantity)}주` : event.type === "ORDER_CANCELLED" ? event.reason : event.type === "ORDER_REJECTED" ? event.reason : "가격·시간 우선 원장"}</span></div><time>#{event.sequence}</time></div>) : <div className="empty-activity">엔진 이벤트가 없습니다.</div>}</div>}
-              <div className="activity-footer"><span>세션 체결수량</span><strong>{formatNumber(trades.reduce((sum, trade) => sum + trade.quantity, 0))}주</strong></div>
+              {activeTab === "trades" ? <div className="trade-list">{visibleTrades.length ? visibleTrades.slice(0, 10).map((trade) => <div className="trade-row" key={trade.id}><span className="buy-color">체결</span><strong>{formatNumber(trade.price)}</strong><span>{formatNumber(trade.quantity)}주</span><time>seq {trade.sequence}</time></div>) : <div className="empty-activity">체결 이벤트가 없습니다.</div>}</div> : <div className="event-list">{events.length ? events.slice(-6).reverse().map((event) => <div className="event-row" key={`${event.type}-${event.sequence}`}><span className={`event-icon ${event.type === "EXECUTION" ? "green" : event.type === "ORDER_REJECTED" ? "amber" : "blue"}`}>{event.type === "EXECUTION" ? "✓" : event.type === "ORDER_CANCELLED" ? "×" : event.type === "SELF_TRADE_PREVENTED" ? "!" : "↗"}</span><div><strong>{event.type === "EXECUTION" ? "체결 이벤트" : event.type === "ORDER_ACCEPTED" ? "주문 접수" : event.type === "ORDER_CANCELLED" ? "주문 취소" : event.type === "SELF_TRADE_PREVENTED" ? "자기체결 방지" : event.type === "ORDER_REJECTED" ? "주문 거부" : "주문 정정"}</strong><span>{event.type === "EXECUTION" ? `${formatNumber(event.execution.price)}원 · ${formatNumber(event.execution.quantity)}주` : event.type === "ORDER_CANCELLED" ? event.reason : event.type === "ORDER_REJECTED" ? event.reason : "가격·시간 우선 원장"}</span></div><time>#{event.sequence}</time></div>) : <div className="empty-activity">엔진 이벤트가 없습니다.</div>}</div>}
+              <div className="activity-footer"><span>세션 체결수량</span><strong>{formatNumber(visibleTrades.reduce((sum, trade) => sum + trade.quantity, 0))}주</strong></div>
             </section>
           </div>
 
-          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : "시장가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={12} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
+          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : "시장가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={13} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
           <footer className="page-footer"><span>TradingStockSysyem · manual core verification mode</span><span><span className="tiny-dot amber" /> MARKET DATA DISCONNECTED</span></footer>
         </div>
       </section>
