@@ -93,3 +93,33 @@ test("opening auction queues orders and uncrosses at one clearing price", () => 
   assert.equal(engine.getOrder("B-AUC")?.status, "PARTIAL");
   assert.equal(engine.getOrder("S-AUC")?.status, "FILLED");
 });
+
+test("midpoint orders price from the current two-sided quote", () => {
+  const engine = new MatchingEngine();
+  engine.submit({ id: "B-MID-BOOK", symbol: "005930", participantId: "BUYER", side: "BUY", type: "LIMIT", price: 10000, quantity: 10 });
+  engine.submit({ id: "S-MID-BOOK", symbol: "005930", participantId: "SELLER", side: "SELL", type: "LIMIT", price: 10200, quantity: 10 });
+  const result = engine.submit({ id: "B-MID", symbol: "005930", participantId: "MIDPOINT", side: "BUY", type: "MIDPOINT", quantity: 5 });
+  assert.equal(result.accepted, true);
+  assert.equal(result.order?.price, 10100);
+  assert.equal(result.order?.type, "MIDPOINT");
+  assert.equal(engine.snapshot("005930").bidLevels[0]?.price, 10100);
+});
+
+test("stop-limit orders wait for a trigger execution and emit an audit event", () => {
+  const engine = new MatchingEngine();
+  const pending = engine.submit({ id: "B-STOP", symbol: "005930", participantId: "STOPPER", side: "BUY", type: "STOP_LIMIT", stopPrice: 10100, price: 10100, quantity: 5 });
+  assert.equal(pending.order?.status, "PENDING_TRIGGER");
+  engine.submit({ id: "S-TRIGGER", symbol: "005930", participantId: "SELLER", side: "SELL", type: "LIMIT", price: 10100, quantity: 5 });
+  const trigger = engine.submit({ id: "B-TRIGGER", symbol: "005930", participantId: "BUYER", side: "BUY", type: "LIMIT", price: 10100, quantity: 5 });
+  assert.equal(trigger.executions.length, 1);
+  assert.equal(engine.getOrder("B-STOP")?.status, "OPEN");
+  assert.equal(engine.getEvents().some((event) => event.type === "ORDER_TRIGGERED"), true);
+});
+
+test("participant risk limits reject oversized or halted orders", () => {
+  const engine = new MatchingEngine();
+  engine.setParticipantRiskLimit("BANK-1", { maxOrderQuantity: 10, maxOrderNotional: 100_000, maxOpenOrders: 2 });
+  assert.match(engine.submit({ id: "RISK-QTY", symbol: "005930", participantId: "BANK-1", side: "BUY", type: "LIMIT", price: 10000, quantity: 11 }).reason ?? "", /quantity exceeds participant limit/);
+  engine.setParticipantHalted("BANK-1", true);
+  assert.equal(engine.submit({ id: "RISK-HALT", symbol: "005930", participantId: "BANK-1", side: "BUY", type: "LIMIT", price: 10000, quantity: 1 }).reason, "participant is halted by risk control");
+});

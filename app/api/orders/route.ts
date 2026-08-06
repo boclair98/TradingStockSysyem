@@ -12,12 +12,13 @@ type OrderPayload = {
   type?: OrderType;
   timeInForce?: TimeInForce;
   price?: number | null;
+  stopPrice?: number | null;
   quantity?: number;
   live?: boolean;
 };
 
 const isSide = (value: unknown): value is Side => value === "BUY" || value === "SELL";
-const isOrderType = (value: unknown): value is OrderType => value === "LIMIT" || value === "MARKET";
+const isOrderType = (value: unknown): value is OrderType => value === "LIMIT" || value === "MARKET" || value === "MIDPOINT" || value === "STOP_LIMIT";
 const isTif = (value: unknown): value is TimeInForce => value === "GTC" || value === "IOC" || value === "FOK";
 
 export async function GET() {
@@ -52,6 +53,7 @@ export async function POST(request: Request) {
   if (!isOrderType(payload.type)) return Response.json({ error: "type must be LIMIT or MARKET" }, { status: 400 });
   if (payload.timeInForce !== undefined && !isTif(payload.timeInForce)) return Response.json({ error: "invalid timeInForce" }, { status: 400 });
   if (!Number.isSafeInteger(payload.quantity) || (payload.quantity ?? 0) <= 0) return Response.json({ error: "quantity must be a positive integer" }, { status: 400 });
+  const quantity = payload.quantity as number;
 
   const result = submitPaperOrder({
     id: payload.id?.trim() || `API-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -60,8 +62,9 @@ export async function POST(request: Request) {
     side: payload.side,
     type: payload.type,
     timeInForce: payload.type === "MARKET" ? "IOC" : payload.timeInForce ?? "GTC",
-    price: payload.type === "MARKET" ? null : payload.price ?? null,
-    quantity: payload.quantity,
+    price: payload.type === "MARKET" || payload.type === "MIDPOINT" ? null : payload.price ?? null,
+    stopPrice: payload.type === "STOP_LIMIT" ? payload.stopPrice ?? null : null,
+    quantity,
   });
 
   return Response.json({ venue: "NEXTRADE", mode: "paper", ...result }, {

@@ -36,3 +36,13 @@ export function cancelPaperOrder(orderId: string, participantId: string) {
   if (result.order) runtime.orders.set(result.order.id, result.order);
   return result;
 }
+
+export function replacePaperOrder(orderId: string, participantId: string, quantity: number, price?: number | null) {
+  const runtime = getPaperRuntime();
+  const current = runtime.engine.getOrder(orderId);
+  const result = runtime.engine.replace(orderId, quantity, price, participantId);
+  if (result.order) runtime.orders.set(result.order.id, result.order);
+  if (current) runtime.orders.set(orderId, runtime.engine.getOrder(orderId) ?? current);
+  if (result.executions.length) runtime.executions.unshift(...result.executions);
+  return result;
+}

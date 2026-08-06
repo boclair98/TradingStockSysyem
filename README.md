@@ -17,7 +17,7 @@
 ## 주요 기능
 
 - 가격·시간 우선(price/time priority) 매칭
-- 지정가·시장가 주문
+- 지정가·시장가·중간가·스톱지정가 주문(가상 엔진 검증용)
 - GTC·IOC·FOK 유효조건
 - 주문 취소·정정 및 미체결 전체취소
 - `CANCEL_TAKER` 자기체결 방지 정책
@@ -95,6 +95,9 @@ GET    /api/book?symbol=005930
 GET    /api/orders
 POST   /api/orders
 DELETE /api/orders/{orderId}?participantId=api-paper
+POST   /api/orders/{orderId}?participantId=api-paper (정정)
+GET    /api/events?afterSequence=0
+GET    /api/risk?participantId=api-paper
 ```
 
 주문 제출 예시:
@@ -110,6 +113,15 @@ DELETE /api/orders/{orderId}?participantId=api-paper
   "quantity": 10
 }
 ```
+
+중간가 주문은 `type`을 `MIDPOINT`로 지정하고 가격을 생략합니다. 현재 호가창에 양쪽
+호가가 모두 있을 때 기준 중간가격으로 가상 주문을 생성합니다. 스톱지정가는 `type`을
+`STOP_LIMIT`으로 지정하고 `price`와 `stopPrice`를 함께 보내며, 발동 전에는
+`PENDING_TRIGGER` 상태로 감사 이벤트에 남습니다. 이 동작은 외부 NBBO·거래소 프로토콜이
+없는 paper 검증 구현이며, 실거래소의 동적 중간가·스톱 주문 규격을 대체하지 않습니다.
+
+paper 엔진에는 참가자별 기본 사전 한도(주문수량 100,000주, 주문금액 10억원, 미체결
+1,000건)가 있으며, 실제 계좌·잔고·신용·공매도 한도를 대신하지 않습니다.
 
 `GET /api/readiness`는 실제 NEXTRADE 연동에 필요한 환경변수의 존재 여부만 알려주며,
 비밀값 자체는 반환하지 않습니다. 현재 `NEXTRADE_MODE`의 기본값은 `disabled`입니다.

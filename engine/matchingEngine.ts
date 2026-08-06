@@ -1,9 +1,9 @@
 import { dailyPriceBand, phaseLabel, stockTickSize, type KoreanMarket, type MarketPhase, type VenueId } from "./koreanMarketRules";
 
 export type Side = "BUY" | "SELL";
-export type OrderType = "LIMIT" | "MARKET";
+export type OrderType = "LIMIT" | "MARKET" | "MIDPOINT" | "STOP_LIMIT";
 export type TimeInForce = "GTC" | "IOC" | "FOK";
-export type OrderStatus = "OPEN" | "PARTIAL" | "FILLED" | "CANCELLED" | "REJECTED";
+export type OrderStatus = "OPEN" | "PARTIAL" | "PENDING_TRIGGER" | "FILLED" | "CANCELLED" | "REJECTED";
 export type SelfTradePolicy = "CANCEL_TAKER" | "CANCEL_MAKER";
 
 export interface InstrumentConfig {
@@ -19,6 +19,25 @@ export interface InstrumentConfig {
   dailyPriceLimitPercent?: number;
 }
 
+export interface ParticipantRiskLimits {
+  maxOrderQuantity: number;
+  maxOrderNotional: number;
+  maxOpenOrders: number;
+}
+
+export interface ParticipantRiskSnapshot {
+  participantId: string;
+  halted: boolean;
+  openOrders: number;
+  limits: ParticipantRiskLimits;
+}
+
+const DEFAULT_RISK_LIMITS: ParticipantRiskLimits = {
+  maxOrderQuantity: 100_000,
+  maxOrderNotional: 1_000_000_000,
+  maxOpenOrders: 1_000,
+};
+
 export interface Order {
   id: string;
   symbol: string;
@@ -27,6 +46,9 @@ export interface Order {
   type: OrderType;
   timeInForce: TimeInForce;
   price: number | null;
+  stopPrice?: number | null;
+  triggeredAt?: string;
+  triggered?: boolean;
   quantity: number;
   remaining: number;
   status: OrderStatus;
@@ -44,6 +66,7 @@ export interface SubmitOrderInput {
   type: OrderType;
   timeInForce?: TimeInForce;
   price?: number | null;
+  stopPrice?: number | null;
   quantity: number;
 }
 
@@ -89,6 +112,7 @@ export type EngineEvent =
   | { type: "EXECUTION"; sequence: number; execution: Execution }
   | { type: "ORDER_CANCELLED"; sequence: number; order: Order; reason: string }
   | { type: "ORDER_REPLACED"; sequence: number; oldOrderId: string; newOrder: Order; emittedAt: string }
+  | { type: "ORDER_TRIGGERED"; sequence: number; order: Order; emittedAt: string }
   | { type: "SELF_TRADE_PREVENTED"; sequence: number; takerOrderId: string; makerOrderId: string; policy: SelfTradePolicy; emittedAt: string }
   | { type: "MARKET_STATE_CHANGED"; sequence: number; venue: VenueId; phase: MarketPhase; emittedAt: string }
   | { type: "AUCTION_EXECUTED"; sequence: number; symbol: string; price: number; quantity: number; emittedAt: string };
@@ -140,6 +164,10 @@ export class MatchingEngine {
   private readonly orders = new Map<string, Order>();
   private readonly instruments = new Map<string, InstrumentConfig>();
   private readonly eventLog: EngineEvent[] = [];
+  private readonly stopOrders = new Map<string, Order>();
+  private readonly lastTradePrices = new Map<string, number>();
+  private readonly participantRisk = new Map<string, ParticipantRiskLimits>();
+  private readonly haltedParticipants = new Set<string>();
   private readonly listeners = new Set<Listener>();
   private sequence = 0;
   private marketPhase: MarketPhase = "CONTINUOUS";
@@ -150,6 +178,31 @@ export class MatchingEngine {
     private readonly venue: VenueId = "NEXTRADE",
   ) {
     for (const instrument of instruments) this.registerInstrument(instrument);
+  }
+
+  setParticipantRiskLimit(participantId: string, limits: Partial<ParticipantRiskLimits>): void {
+    const normalized = participantId.trim();
+    if (!normalized) throw new Error("participantId is required");
+    const current = this.participantRisk.get(normalized) ?? DEFAULT_RISK_LIMITS;
+    this.participantRisk.set(normalized, {
+      maxOrderQuantity: limits.maxOrderQuantity ?? current.maxOrderQuantity,
+      maxOrderNotional: limits.maxOrderNotional ?? current.maxOrderNotional,
+      maxOpenOrders: limits.maxOpenOrders ?? current.maxOpenOrders,
+    });
+  }
+
+  setParticipantHalted(participantId: string, halted: boolean): void {
+    const normalized = participantId.trim();
+    if (!normalized) throw new Error("participantId is required");
+    if (halted) this.haltedParticipants.add(normalized);
+    else this.haltedParticipants.delete(normalized);
+  }
+
+  getParticipantRisk(participantId: string): ParticipantRiskSnapshot {
+    const normalized = participantId.trim();
+    const limits = this.participantRisk.get(normalized) ?? DEFAULT_RISK_LIMITS;
+    const openOrders = [...this.orders.values()].filter((order) => order.participantId === normalized && (order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER")).length;
+    return { participantId: normalized, halted: this.haltedParticipants.has(normalized), openOrders, limits };
   }
 
   setMarketPhase(phase: MarketPhase): void {
@@ -183,24 +236,46 @@ export class MatchingEngine {
       return { accepted: false, order: null, executions: [], reason };
     }
 
+    const participantId = input.participantId.trim();
+    const riskReason = this.riskReason(input, participantId);
+    if (riskReason) {
+      this.emit({ type: "ORDER_REJECTED", sequence: this.nextSequence(), orderId: input.id, symbol: input.symbol, reason: riskReason, emittedAt: nowIso() });
+      return { accepted: false, order: null, executions: [], reason: riskReason };
+    }
+
     const book = this.getBook(input.symbol);
+    const midpoint = input.type === "MIDPOINT" ? this.currentMidpoint(book) : null;
+    if (input.type === "MIDPOINT" && midpoint == null) {
+      const reason = "midpoint order requires a two-sided quote";
+      this.emit({ type: "ORDER_REJECTED", sequence: this.nextSequence(), orderId: input.id, symbol: input.symbol, reason, emittedAt: nowIso() });
+      return { accepted: false, order: null, executions: [], reason };
+    }
+    const triggered = input.type !== "STOP_LIMIT" || this.stopConditionMet(input.side, input.stopPrice as number, this.lastTradePrices.get(input.symbol));
     const order: Order = {
       id: input.id,
       symbol: input.symbol,
-      participantId: input.participantId.trim(),
+      participantId,
       side: input.side,
       type: input.type,
       timeInForce,
-      price: input.type === "LIMIT" ? input.price ?? null : null,
+      price: input.type === "LIMIT" || input.type === "STOP_LIMIT" ? input.price ?? null : midpoint,
+      stopPrice: input.type === "STOP_LIMIT" ? input.stopPrice ?? null : null,
       quantity: input.quantity,
       remaining: input.quantity,
       status: "OPEN",
       sequence: this.nextSequence(),
       acceptedAt: nowIso(),
       lastUpdatedAt: nowIso(),
+      triggered,
     };
+    if (input.type === "STOP_LIMIT" && !triggered) order.status = "PENDING_TRIGGER";
     this.orders.set(order.id, order);
     this.emit({ type: "ORDER_ACCEPTED", sequence: order.sequence, order: cloneOrder(order) });
+
+    if (order.status === "PENDING_TRIGGER") {
+      this.stopOrders.set(order.id, order);
+      return { accepted: true, order: cloneOrder(order), executions: [] };
+    }
 
     // FOK is an all-or-none instruction. It never changes the book unless the
     // full quantity can be executed against currently executable liquidity.
@@ -256,14 +331,16 @@ export class MatchingEngine {
         executedAt: nowIso(),
       };
       executions.push(execution);
+      this.lastTradePrices.set(order.symbol, execution.price);
       this.emit({ type: "EXECUTION", sequence: execution.sequence, execution });
+      this.activateTriggeredStops(order.symbol, execution.price, book);
       if (maker.remaining === 0) this.removeFromBook(book, maker);
     }
 
     if (order.status !== "CANCELLED") {
       order.status = order.remaining === 0 ? "FILLED" : executions.length ? "PARTIAL" : "OPEN";
       order.lastUpdatedAt = nowIso();
-      if (order.remaining > 0 && order.type === "LIMIT" && timeInForce === "GTC") this.addToBook(book, order);
+      if (order.remaining > 0 && (order.type === "LIMIT" || order.type === "MIDPOINT" || order.type === "STOP_LIMIT") && timeInForce === "GTC") this.addToBook(book, order);
       if (order.remaining > 0 && (order.type === "MARKET" || timeInForce === "IOC")) {
         order.status = "CANCELLED";
         order.lastUpdatedAt = nowIso();
@@ -322,7 +399,9 @@ export class MatchingEngine {
         executedAt: nowIso(),
       };
       executions.push(execution);
+      this.lastTradePrices.set(symbol, execution.price);
       this.emit({ type: "EXECUTION", sequence: execution.sequence, execution });
+      this.activateTriggeredStops(symbol, clearingPrice, book);
       if (bid.remaining === 0) { bid.status = "FILLED"; this.removeFromBook(book, bid); bidIndex += 1; } else bid.status = "PARTIAL";
       if (ask.remaining === 0) { ask.status = "FILLED"; this.removeFromBook(book, ask); askIndex += 1; } else ask.status = "PARTIAL";
       bid.lastUpdatedAt = nowIso();
@@ -339,6 +418,7 @@ export class MatchingEngine {
     if (participantId && order.participantId !== participantId) return { cancelled: false, reason: "participant mismatch" };
     if (order.status === "FILLED" || order.status === "CANCELLED" || order.status === "REJECTED") return { cancelled: false, reason: "order is not cancellable" };
     this.removeFromBook(this.getBook(order.symbol), order);
+    this.stopOrders.delete(order.id);
     order.status = "CANCELLED";
     order.lastUpdatedAt = nowIso();
     this.emitCancelled(order, reason);
@@ -355,7 +435,7 @@ export class MatchingEngine {
     const cancelled = this.cancel(orderId, participantId, "REPLACED");
     if (!cancelled.cancelled) return { accepted: false, order: null, executions: [], reason: cancelled.reason };
     const replacementId = `${orderId}-R${this.sequence + 1}`;
-    const result = this.submit({ id: replacementId, symbol: current.symbol, participantId: current.participantId, side: current.side, type: current.type, timeInForce: current.timeInForce, quantity, price: current.type === "LIMIT" ? price ?? current.price : null });
+    const result = this.submit({ id: replacementId, symbol: current.symbol, participantId: current.participantId, side: current.side, type: current.type, timeInForce: current.timeInForce, quantity, price: current.type === "MARKET" || current.type === "MIDPOINT" ? null : price ?? current.price, stopPrice: current.type === "STOP_LIMIT" ? current.stopPrice : null });
     if (result.order) {
       result.order.replacesOrderId = orderId;
       const stored = this.orders.get(result.order.id);
@@ -421,12 +501,12 @@ export class MatchingEngine {
     if (!input.id || !input.symbol || !input.participantId?.trim()) return "id, symbol, participantId are required";
     if (this.marketPhase === "CLOSED") return "market is closed";
     if (input.side !== "BUY" && input.side !== "SELL") return "side must be BUY or SELL";
-    if (input.type !== "LIMIT" && input.type !== "MARKET") return "type must be LIMIT or MARKET";
+    if (!["LIMIT", "MARKET", "MIDPOINT", "STOP_LIMIT"].includes(input.type)) return "unsupported order type";
     if (!["GTC", "IOC", "FOK"].includes(timeInForce)) return "unsupported time in force";
     const instrument = this.instrument(input.symbol);
     if (!Number.isSafeInteger(input.quantity) || input.quantity <= 0 || input.quantity % instrument.lotSize !== 0) return `quantity must be a positive multiple of ${instrument.lotSize}`;
     if (input.quantity > instrument.maxOrderQuantity) return `quantity exceeds max ${instrument.maxOrderQuantity}`;
-    if (input.type === "LIMIT") {
+    if (input.type === "LIMIT" || input.type === "STOP_LIMIT") {
       if (!Number.isSafeInteger(input.price) || (input.price as number) < instrument.minPrice || (input.price as number) > instrument.maxPrice) return "limit price is outside the configured band";
       const tickSize = instrument.market ? stockTickSize(input.price as number, instrument.market) : instrument.tickSize;
       if ((input.price as number) % tickSize !== 0) return `price must be a multiple of ${tickSize}`;
@@ -435,12 +515,62 @@ export class MatchingEngine {
         if ((input.price as number) < band.lower || (input.price as number) > band.upper) return `price must be within ${band.lower}-${band.upper}`;
       }
     }
-    if (input.type === "MARKET" && input.price != null) return "market order cannot include a price";
+    if (input.type === "STOP_LIMIT") {
+      if (!Number.isSafeInteger(input.stopPrice)) return "stop-limit order requires a stopPrice";
+      const tickSize = instrument.market ? stockTickSize(input.stopPrice as number, instrument.market) : instrument.tickSize;
+      if ((input.stopPrice as number) % tickSize !== 0) return `stopPrice must be a multiple of ${tickSize}`;
+      if (instrument.basePrice) {
+        const band = dailyPriceBand(instrument.basePrice, instrument.dailyPriceLimitPercent ?? 30);
+        if ((input.stopPrice as number) < band.lower || (input.stopPrice as number) > band.upper) return `stopPrice must be within ${band.lower}-${band.upper}`;
+      }
+    }
+    if (input.type === "MARKET" || input.type === "MIDPOINT") {
+      if (input.price != null) return `${input.type.toLowerCase()} order cannot include a price`;
+    }
     if (input.type === "MARKET" && timeInForce === "GTC") return "market order must be IOC or FOK";
+    if ((input.type === "MIDPOINT" || input.type === "STOP_LIMIT") && this.marketPhase !== "CONTINUOUS") return `${input.type.toLowerCase()} orders require continuous trading`;
     if ((this.marketPhase === "OPENING_AUCTION" || this.marketPhase === "CLOSING_AUCTION") && timeInForce !== "GTC") return "IOC/FOK are not accepted during auction phases";
     if (this.isAuctionPhase() && input.type === "MARKET") return "market orders require an auction uncross adapter in this core";
-    if ((this.marketPhase === "PRE_MARKET" || this.marketPhase === "AFTER_MARKET") && input.type === "MARKET") return "market orders are disabled in off-hours phases";
+    if ((this.marketPhase === "PRE_MARKET" || this.marketPhase === "AFTER_MARKET") && (input.type === "MARKET" || input.type === "MIDPOINT" || input.type === "STOP_LIMIT")) return "this order type is disabled in off-hours phases";
     return undefined;
+  }
+
+  private riskReason(input: SubmitOrderInput, participantId: string): string | undefined {
+    if (this.haltedParticipants.has(participantId)) return "participant is halted by risk control";
+    const limits = this.participantRisk.get(participantId) ?? DEFAULT_RISK_LIMITS;
+    if (input.quantity > limits.maxOrderQuantity) return `quantity exceeds participant limit ${limits.maxOrderQuantity}`;
+    const openOrders = [...this.orders.values()].filter((order) => order.participantId === participantId && (order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER")).length;
+    if (openOrders >= limits.maxOpenOrders) return `open order limit exceeded (${limits.maxOpenOrders})`;
+    const instrument = this.instrument(input.symbol);
+    const referencePrice = input.price ?? instrument.basePrice ?? 0;
+    if (referencePrice > 0 && referencePrice * input.quantity > limits.maxOrderNotional) return `order notional exceeds participant limit ${limits.maxOrderNotional}`;
+    return undefined;
+  }
+
+  private currentMidpoint(book: Book): number | null {
+    const bid = this.sorted(book.bids, "BUY")[0]?.price;
+    const ask = this.sorted(book.asks, "SELL")[0]?.price;
+    if (bid == null || ask == null || ask < bid) return null;
+    const midpoint = (bid + ask) / 2;
+    return Number.isSafeInteger(midpoint) ? midpoint : Math.floor(midpoint);
+  }
+
+  private stopConditionMet(side: Side, stopPrice: number, lastTradePrice?: number): boolean {
+    if (lastTradePrice == null) return false;
+    return side === "BUY" ? lastTradePrice >= stopPrice : lastTradePrice <= stopPrice;
+  }
+
+  private activateTriggeredStops(symbol: string, lastPrice: number, book: Book): void {
+    for (const order of this.stopOrders.values()) {
+      if (order.symbol !== symbol || !this.stopConditionMet(order.side, order.stopPrice as number, lastPrice)) continue;
+      this.stopOrders.delete(order.id);
+      order.triggered = true;
+      order.triggeredAt = nowIso();
+      order.status = "OPEN";
+      order.lastUpdatedAt = nowIso();
+      this.addToBook(book, order);
+      this.emit({ type: "ORDER_TRIGGERED", sequence: this.nextSequence(), order: cloneOrder(order), emittedAt: nowIso() });
+    }
   }
 
   private availableQuantity(taker: Order, book: Book): number {
@@ -454,6 +584,8 @@ export class MatchingEngine {
   }
 
   private crosses(taker: Order, maker: Order): boolean {
+    if (taker.type === "STOP_LIMIT" && !taker.triggered) return false;
+    if (maker.type === "STOP_LIMIT" && !maker.triggered) return false;
     if (taker.type === "MARKET") return true;
     return taker.side === "BUY" ? (maker.price as number) <= (taker.price as number) : (maker.price as number) >= (taker.price as number);
   }
