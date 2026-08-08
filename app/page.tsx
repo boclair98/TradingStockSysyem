@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { MatchingEngine, type EngineEvent, type Execution, type Order, type OrderType, type Side, type TimeInForce } from "../engine/matchingEngine";
 import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
 import { instrumentFor, NEXTRADE_INSTRUMENTS as INSTRUMENTS } from "../engine/instrumentMaster";
@@ -12,6 +12,7 @@ const formatPrice = (value: number | null) => value == null ? "—" : `${formatN
 const nowStamp = () => new Date().toLocaleTimeString("ko-KR", { hour12: false }) + "." + String(Date.now() % 1000).padStart(3, "0");
 
 type OrderRow = Order & { filled: number; submittedAt: string };
+type BrokerView = { provider: string; mode: string; status: string; venuePreference: string };
 
 export default function Home() {
   const [selectedSymbol, setSelectedSymbol] = useState(DEFAULT_SYMBOL);
@@ -30,6 +31,18 @@ export default function Home() {
   const [participantId, setParticipantId] = useState("operator");
   const [message, setMessage] = useState("주문 입력을 기다리는 중");
   const [activeTab, setActiveTab] = useState<"orders" | "trades">("orders");
+  const [brokerView, setBrokerView] = useState<BrokerView>({ provider: "paper", mode: "paper", status: "paper_only", venuePreference: "AUTO" });
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/readiness", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((payload) => {
+        if (active && payload?.broker) setBrokerView(payload.broker as BrokerView);
+      })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, []);
 
   const selectedInstrument = instrumentFor(selectedSymbol);
   const visibleTrades = trades.filter((trade) => trade.symbol === selectedSymbol);
@@ -162,7 +175,7 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / MATCHING CORE</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
-          <div className="top-actions"><div className="market-state"><span className="tiny-dot amber" /> 엔진 실행 · 시장데이터 피드 대기</div><div className="header-chip"><span className="tiny-dot green" /> LOCAL CORE</div></div>
+          <div className="top-actions"><div className="market-state"><span className="tiny-dot amber" /> 엔진 실행 · 증권사 시세 피드 대기</div><div className="header-chip"><span className="tiny-dot green" /> {brokerView.provider.toUpperCase()} · {brokerView.mode.toUpperCase()}</div></div>
         </header>
 
         <div className="content">
@@ -170,12 +183,12 @@ export default function Home() {
             <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">호가창 · 주문원장 · 체결 이벤트</div></div></div>
             <div className="instrument-selector"><label htmlFor="instrument-select">종목 선택</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>가상 종목 마스터 · {INSTRUMENTS.length}종목</span></div>
             <div className="quote-block"><span className="quote-label">최근 체결</span><strong>{formatPrice(lastTrade)}</strong><span className="muted">외부 피드 없음</span></div>
-            <div className="instrument-actions"><span className="api-status"><span className="tiny-dot amber" /> 시장데이터 미연결</span><button className="ghost-button" onClick={resetEngine}>엔진 초기화</button></div>
+            <div className="instrument-actions"><span className="api-status"><span className="tiny-dot amber" /> 증권사 API · {brokerView.status}</span><button className="ghost-button" onClick={resetEngine}>엔진 초기화</button></div>
           </div>
 
-          <section className="feed-warning"><span className="warning-icon">!</span><div><strong>시장데이터 게이트웨이가 연결되지 않았습니다.</strong><span>현재 화면은 실거래소 시세를 생성하거나 대체하지 않습니다. 아래 주문 입력은 엔진 규칙을 검증하기 위한 수동 주문만 받습니다.</span></div></section>
+          <section className="feed-warning"><span className="warning-icon">!</span><div><strong>증권사 실시간 API가 아직 연결되지 않았습니다.</strong><span>공통 브로커 어댑터는 준비됐습니다. 증권사 sandbox 문서와 인증 설정을 등록하기 전까지 주문·호가·계좌는 paper 모드로만 처리됩니다.</span></div></section>
 
-          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>VENUE PROFILE</span><strong>NEXTRADE ATS · KOSPI</strong></div><div><span>STATE JOURNAL</span><strong>APPEND-ONLY · SEQ {formatNumber(book.sequence)}</strong></div><div className="profile-lock"><span className={`tiny-dot ${marketPhase === "CLOSED" ? "amber" : "green"}`} /> {marketPhase === "CLOSED" ? "ORDER GATE CLOSED" : "ORDER GATE OPEN"}</div></section>
+          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>BROKER GATEWAY</span><strong>{brokerView.provider.toUpperCase()} · {brokerView.mode.toUpperCase()}</strong></div><div><span>TARGET VENUE</span><strong>{brokerView.venuePreference} · KRX/NEXTRADE</strong></div><div className="profile-lock"><span className={`tiny-dot ${marketPhase === "CLOSED" ? "amber" : "green"}`} /> {marketPhase === "CLOSED" ? "ORDER GATE CLOSED" : "ORDER GATE OPEN"}</div></section>
 
           <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">VENUE SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>NEXTRADE · local control plane</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className="auction-run" onClick={runAuctionCycle} disabled={marketPhase !== "OPENING_AUCTION" && marketPhase !== "CLOSING_AUCTION"}>RUN AUCTION</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
 
@@ -230,7 +243,7 @@ export default function Home() {
           </div>
 
           <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>발동가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : order.type === "MARKET" ? "시장가" : order.type === "MIDPOINT" ? "중간가" : "스톱지정가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatPrice(order.stopPrice ?? null)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "PENDING_TRIGGER" ? "발동대기" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={14} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
-          <footer className="page-footer"><span>TradingStockSysyem · manual core verification mode</span><span><span className="tiny-dot amber" /> MARKET DATA DISCONNECTED</span></footer>
+          <footer className="page-footer"><span>TradingStockSysyem · securities broker adapter mode</span><span><span className="tiny-dot amber" /> {brokerView.provider.toUpperCase()} MARKET DATA · {brokerView.status.toUpperCase()}</span></footer>
         </div>
       </section>
     </main>

@@ -1,17 +1,19 @@
-import { getNextradeReadiness } from "../../../engine/nextradeGateway";
+import { getBrokerReadiness, redactBrokerConfig } from "../../../engine/brokerGateway";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const nextrade = getNextradeReadiness();
+  const broker = getBrokerReadiness();
   return Response.json({
-    ok: nextrade.status === "paper_only" || nextrade.status === "adapter_pending",
+    ok: broker.status === "paper_only" || broker.status === "adapter_pending",
     service: "TradingStockSysyem",
-    venue: "NEXTRADE",
-    paperTrading: true,
-    nextrade,
+    targetVenue: "NEXTRADE",
+    integrationModel: "securities_broker_api",
+    paperTrading: broker.mode === "paper",
+    broker,
+    configuredConnection: redactBrokerConfig(),
   }, {
-    status: nextrade.status === "blocked" ? 503 : 200,
+    status: broker.status === "blocked" ? 503 : 200,
     headers: { "Cache-Control": "no-store" },
   });
 }

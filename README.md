@@ -33,6 +33,7 @@
 ```text
 app/page.tsx                    운영 콘솔 UI와 종목 선택/주문 입력
 engine/matchingEngine.ts        주문원장, 검증, 매칭, 경매, 이벤트 로그
+engine/brokerGateway.ts         증권사 공통 주문·시세·계좌 어댑터 계약과 준비상태
 engine/koreanMarketRules.ts    한국시장 호가단위·세션·가격범위 규칙
 engine/smartOrderRouter.ts      KRX/NEXTRADE 최우선 후보 선택 로직
 tests/                          매칭엔진·한국시장 규칙 테스트
@@ -67,7 +68,7 @@ npx eslint app/page.tsx engine/matchingEngine.ts
 어댑터를 별도 서버 계층으로 연결해야 합니다.
 
 1. 실시간 시장데이터 수신(WebSocket/FIX 등)
-2. 주문 제출·취소·정정 게이트웨이(FIX/전용 API 등)
+2. 증권사 주문 제출·취소·정정 게이트웨이(REST/WebSocket/전용 API 등)
 3. 사용자 인증·계좌·잔고·권한 검사
 4. 사전 리스크 검사와 주문 한도
 5. 체결 저널 영속화, 장애 복구, 시간 동기화
@@ -98,6 +99,8 @@ DELETE /api/orders/{orderId}?participantId=api-paper
 POST   /api/orders/{orderId}?participantId=api-paper (정정)
 GET    /api/events?afterSequence=0
 GET    /api/risk?participantId=api-paper
+GET    /api/broker/quote?symbol=005930
+GET    /api/broker/account?participantId=api-paper
 ```
 
 주문 제출 예시:
@@ -123,7 +126,13 @@ GET    /api/risk?participantId=api-paper
 paper 엔진에는 참가자별 기본 사전 한도(주문수량 100,000주, 주문금액 10억원, 미체결
 1,000건)가 있으며, 실제 계좌·잔고·신용·공매도 한도를 대신하지 않습니다.
 
-`GET /api/readiness`는 실제 NEXTRADE 연동에 필요한 환경변수의 존재 여부만 알려주며,
-비밀값 자체는 반환하지 않습니다. 현재 `NEXTRADE_MODE`의 기본값은 `disabled`입니다.
-실제 어댑터를 활성화하기 전에는 NEXTRADE 참가 증권사의 공식 sandbox 접속 사양,
-시세/주문 프로토콜, conformance test, 인증정보가 필요합니다.
+`GET /api/readiness`는 선택한 증권사 어댑터에 필요한 환경변수의 존재 여부만 알려주며,
+비밀값 자체는 반환하지 않습니다. 기본값은 `BROKER_PROVIDER=paper`,
+`BROKER_MODE=paper`입니다. `korea_investment`, `kiwoom`, `shinhan`, `samsung`,
+`generic` 공급자 식별자를 지원하며, 실제 전송 구현은 선택한 증권사의 공식 sandbox 문서가
+제공된 뒤 연결합니다.
+
+증권사 연동에 사용하는 공통 설정은 `BROKER_API_BASE_URL`, `BROKER_WEBSOCKET_URL`,
+`BROKER_APP_KEY`, `BROKER_APP_SECRET`, `BROKER_ACCOUNT_ID`이며, 주문별로
+`venuePreference`를 `AUTO`, `KRX`, `NEXTRADE` 중 하나로 전달할 수 있습니다. 해당 증권사가
+직접 시장 선택을 지원하지 않으면 `AUTO`를 사용하고 증권사의 최선집행/SOR 정책에 맡깁니다.
