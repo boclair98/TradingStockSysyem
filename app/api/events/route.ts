@@ -9,11 +9,12 @@ export async function GET(request: Request) {
     return Response.json({ error: "afterSequence must be a non-negative integer" }, { status: 400 });
   }
   const runtime = await getHydratedPaperRuntime();
+  const events = runtime.engine.getEvents(afterSequence).filter((event) => event.type === "EXECUTION" || event.type === "MARKET_STATE_CHANGED" || event.type === "AUCTION_EXECUTED");
   return Response.json({
     venue: "NEXTRADE",
     mode: "paper",
     afterSequence,
     nextSequence: runtime.engine.sequenceNumber,
-    events: runtime.engine.getEvents(afterSequence),
+    events,
   }, { headers: { "Cache-Control": "no-store" } });
 }

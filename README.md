@@ -27,6 +27,11 @@
 - KOSPI/KOSDAQ 가격대별 호가단위와 가격제한폭 검증
 - KRX/NEXTRADE 후보 호가를 비교하는 결정론적 SOR 함수
 - API 연결 전 검증을 위한 다중 가상 종목 마스터
+- 서버 재시작 후 원래 수량·잔량·가격·시간 우선순위를 보존하는 주문 저널 복구
+- 잔고검사부터 체결·원장저장까지 겹치지 않게 처리하는 주문 변경 직렬화
+- 사용자별 예약금액·미체결 한도·감사기록 운영 화면
+- 인증된 사용자 전용 리스크·감사 API와 서버 일괄취소
+- 데이터베이스 응답시간·복구 주문수·안전장치 readiness 진단
 
 ## 구성
 
@@ -56,6 +61,7 @@ npm run dev
 
 ```bash
 npm run build
+npm run test:unit
 npx eslint app/page.tsx engine/matchingEngine.ts
 ```
 
@@ -95,13 +101,19 @@ GET    /api/instruments
 GET    /api/book?symbol=005930
 GET    /api/orders
 POST   /api/orders
-DELETE /api/orders/{orderId}?participantId=api-paper
-POST   /api/orders/{orderId}?participantId=api-paper (정정)
+DELETE /api/orders (현재 사용자의 미체결 전체취소)
+DELETE /api/orders/{orderId}
+POST   /api/orders/{orderId} (정정)
 GET    /api/events?afterSequence=0
-GET    /api/risk?participantId=api-paper
+GET    /api/risk
+GET    /api/audit?limit=50
 GET    /api/broker/quote?symbol=005930
 GET    /api/broker/account?participantId=api-paper
 ```
+
+`GET /api/risk`와 `GET /api/audit`는 로그인한 사용자 본인의 정보만 반환합니다. 전체
+미체결 취소는 `DELETE /api/orders` 한 번으로 서버에서 순차 처리합니다. 공개 이벤트 피드는
+참가자 식별자가 포함된 주문 접수·거부 이벤트를 내보내지 않고 체결 및 시장상태만 제공합니다.
 
 주문 제출 예시:
 

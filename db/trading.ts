@@ -204,8 +204,32 @@ export async function listUserTradingState(userId: string) {
 export async function listOpenOrdersForHydration() {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const rows = await db.query<Order>(`SELECT id, participant_id AS "participantId", symbol, side, order_type AS type, time_in_force AS "timeInForce", price, stop_price AS "stopPrice", quantity, remaining, status, accepted_at AS "acceptedAt" FROM paper_orders WHERE status IN ('OPEN','PARTIAL','PENDING_TRIGGER') ORDER BY accepted_at ASC`);
+  const rows = await db.query<Order>(`SELECT id, participant_id AS "participantId", symbol, side, order_type AS type, time_in_force AS "timeInForce", price, stop_price AS "stopPrice", quantity, remaining, status, sequence, accepted_at AS "acceptedAt", updated_at AS "lastUpdatedAt" FROM paper_orders WHERE status IN ('OPEN','PARTIAL','PENDING_TRIGGER') ORDER BY sequence ASC, accepted_at ASC`);
   return rows.rows;
+}
+
+export async function listUserAudit(userId: string, limit = 50) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+  const result = await db.query<{ id: number; action: string; entityId: string | null; payloadJson: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", created_at AS "createdAt" FROM audit_log WHERE user_id=? ORDER BY id DESC LIMIT ${safeLimit}`, [userId]);
+  return result.rows.map((row) => {
+    let payload: unknown = null;
+    try { payload = JSON.parse(row.payloadJson); } catch { payload = null; }
+    return { id: Number(row.id), action: row.action, entityId: row.entityId, payload, createdAt: row.createdAt };
+  });
+}
+
+export async function getPersistenceHealth() {
+  const startedAt = Date.now();
+  try {
+    await ensureTradingSchema();
+    const db = await getAdapter();
+    await db.query("SELECT 1 AS ok");
+    return { ok: true, provider: db.kind, latencyMs: Date.now() - startedAt };
+  } catch {
+    return { ok: false, provider: "unavailable", latencyMs: Date.now() - startedAt };
+  }
 }
 
 export { OPEN_STATUSES };

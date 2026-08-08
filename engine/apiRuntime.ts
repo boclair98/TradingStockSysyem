@@ -8,7 +8,10 @@ export interface PaperRuntime {
   executions: Execution[];
 }
 
-type TradingGlobal = typeof globalThis & { __tradingStockSysyemPaperRuntime?: PaperRuntime };
+type TradingGlobal = typeof globalThis & {
+  __tradingStockSysyemPaperRuntime?: PaperRuntime;
+  __tradingStockSysyemMutationTail?: Promise<void>;
+};
 
 const globalRuntime = globalThis as TradingGlobal;
 
@@ -32,18 +35,8 @@ export async function getHydratedPaperRuntime(): Promise<PaperRuntime> {
       if (runtime.orders.size > 0 || runtime.engine.sequenceNumber > 0) return runtime;
       const openOrders = await listOpenOrdersForHydration();
       for (const order of openOrders) {
-        const result = runtime.engine.submit({
-          id: order.id,
-          symbol: order.symbol,
-          participantId: order.participantId,
-          side: order.side,
-          type: order.type,
-          timeInForce: order.timeInForce,
-          price: order.price,
-          stopPrice: order.stopPrice,
-          quantity: order.remaining,
-        });
-        if (result.order) runtime.orders.set(result.order.id, result.order);
+        runtime.engine.restoreOpenOrder(order);
+        runtime.orders.set(order.id, order);
       }
       return runtime;
     })().catch((error) => {
@@ -52,6 +45,19 @@ export async function getHydratedPaperRuntime(): Promise<PaperRuntime> {
     });
   }
   return hydrationPromise;
+}
+
+export async function withTradingMutationLock<T>(task: () => Promise<T>): Promise<T> {
+  const previous = globalRuntime.__tradingStockSysyemMutationTail ?? Promise.resolve();
+  let release: () => void = () => undefined;
+  const gate = new Promise<void>((resolve) => { release = () => resolve(); });
+  globalRuntime.__tradingStockSysyemMutationTail = previous.then(() => gate, () => gate);
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release();
+  }
 }
 
 export function submitPaperOrder(input: SubmitOrderInput) {

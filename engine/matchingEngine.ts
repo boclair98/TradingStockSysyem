@@ -215,6 +215,23 @@ export class MatchingEngine {
     return { venue: this.venue, phase: this.marketPhase, label: phaseLabel(this.marketPhase), sequence: this.sequence };
   }
 
+  /**
+   * Restores an already accepted open order without matching it again.
+   * This is used only during journal recovery so the original queue sequence,
+   * accepted time, total quantity and remaining quantity stay intact.
+   */
+  restoreOpenOrder(input: Order): void {
+    if (this.orders.has(input.id)) return;
+    if (!Number.isSafeInteger(input.sequence) || input.sequence < 0) throw new Error("invalid recovery sequence");
+    if (!Number.isSafeInteger(input.quantity) || !Number.isSafeInteger(input.remaining) || input.quantity <= 0 || input.remaining <= 0 || input.remaining > input.quantity) throw new Error("invalid recovery quantity");
+    if (input.status !== "OPEN" && input.status !== "PARTIAL" && input.status !== "PENDING_TRIGGER") throw new Error("only open orders can be recovered");
+    const order = cloneOrder(input);
+    this.orders.set(order.id, order);
+    this.sequence = Math.max(this.sequence, order.sequence);
+    if (order.status === "PENDING_TRIGGER") this.stopOrders.set(order.id, order);
+    else this.addToBook(this.getBook(order.symbol), order);
+  }
+
   registerInstrument(config: InstrumentConfig): void {
     if (!config.symbol || !Number.isSafeInteger(config.tickSize) || config.tickSize <= 0) throw new Error("invalid tick size");
     if (!Number.isSafeInteger(config.lotSize) || config.lotSize <= 0) throw new Error("invalid lot size");

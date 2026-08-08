@@ -123,3 +123,29 @@ test("participant risk limits reject oversized or halted orders", () => {
   engine.setParticipantHalted("BANK-1", true);
   assert.equal(engine.submit({ id: "RISK-HALT", symbol: "005930", participantId: "BANK-1", side: "BUY", type: "LIMIT", price: 10000, quantity: 1 }).reason, "participant is halted by risk control");
 });
+
+test("journal recovery preserves original quantity, remaining quantity and queue sequence", () => {
+  const engine = new MatchingEngine();
+  engine.restoreOpenOrder({
+    id: "RECOVERED-1",
+    symbol: "005930",
+    participantId: "BANK-1",
+    side: "BUY",
+    type: "LIMIT",
+    timeInForce: "GTC",
+    price: 10000,
+    stopPrice: null,
+    quantity: 100,
+    remaining: 35,
+    status: "PARTIAL",
+    sequence: 812,
+    acceptedAt: "2026-01-01T00:00:00.000Z",
+    lastUpdatedAt: "2026-01-01T00:01:00.000Z",
+  });
+  const recovered = engine.getOrder("RECOVERED-1");
+  assert.equal(recovered?.quantity, 100);
+  assert.equal(recovered?.remaining, 35);
+  assert.equal(recovered?.sequence, 812);
+  assert.equal(engine.sequenceNumber, 812);
+  assert.equal(engine.snapshot("005930").bidLevels[0]?.quantity, 35);
+});
