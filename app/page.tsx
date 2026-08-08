@@ -40,6 +40,7 @@ export default function Home() {
   const [brokerView, setBrokerView] = useState<BrokerView>({ provider: "paper", mode: "paper", status: "paper_only", venuePreference: "AUTO" });
   const [session, setSession] = useState<SessionView | null>(null);
   const [signInRequired, setSignInRequired] = useState(false);
+  const [signInPath, setSignInPath] = useState("/signin-with-chatgpt?return_to=%2F");
 
   useEffect(() => {
     let active = true;
@@ -57,7 +58,11 @@ export default function Home() {
     fetch("/api/session", { cache: "no-store" })
       .then(async (response) => {
         if (response.status === 401) {
-          if (active) setSignInRequired(true);
+          const payload = await response.json().catch(() => null);
+          if (active) {
+            setSignInRequired(true);
+            if (payload?.signInPath) setSignInPath(payload.signInPath);
+          }
           return null;
         }
         return response.json();
@@ -231,7 +236,7 @@ export default function Home() {
         </header>
 
         <div className="content">
-          {signInRequired ? <section className="auth-banner"><div><strong>로그인 후 공유 모의시장에 참가하세요</strong><span>사용자별 모의계좌, 주문, 체결내역이 안전하게 분리됩니다.</span></div><a href="/signin-with-chatgpt?return_to=%2F">ChatGPT로 로그인</a></section> : session ? <section className="account-strip"><div><span>참가자</span><strong>{session.user.participantId}</strong></div><div><span>모의 예수금</span><strong>{formatNumber(session.account.cashBalance)}원</strong></div><div><span>주문 가능금액</span><strong>{formatNumber(session.account.availableCash)}원</strong></div><div><span>선택종목 보유</span><strong>{formatNumber(session.account.positions.find((item) => item.symbol === selectedSymbol)?.quantity ?? 0)}주</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
+          {signInRequired ? <section className="auth-banner"><div><strong>로그인 후 공유 모의시장에 참가하세요</strong><span>사용자별 모의계좌, 주문, 체결내역이 안전하게 분리됩니다.</span></div><a href={signInPath}>로그인</a></section> : session ? <section className="account-strip"><div><span>참가자</span><strong>{session.user.participantId}</strong></div><div><span>모의 예수금</span><strong>{formatNumber(session.account.cashBalance)}원</strong></div><div><span>주문 가능금액</span><strong>{formatNumber(session.account.availableCash)}원</strong></div><div><span>선택종목 보유</span><strong>{formatNumber(session.account.positions.find((item) => item.symbol === selectedSymbol)?.quantity ?? 0)}주</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
           <div className="instrument-bar">
             <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">호가창 · 주문원장 · 체결 이벤트</div></div></div>
             <div className="instrument-selector"><label htmlFor="instrument-select">종목 선택</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>가상 종목 마스터 · {INSTRUMENTS.length}종목</span></div>
