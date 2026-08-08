@@ -1,6 +1,7 @@
 import type { ChatGPTUser } from "../app/chatgpt-auth";
 import { NEXTRADE_INSTRUMENTS } from "../engine/instrumentMaster";
 import type { Execution, Order } from "../engine/matchingEngine";
+import type { MarketPhase } from "../engine/koreanMarketRules";
 
 type Statement = { sql: string; params?: unknown[] };
 type QueryResult<T> = { rows: T[]; changes: number };
@@ -28,6 +29,9 @@ const commonSchema = [
   `CREATE TABLE IF NOT EXISTS paper_positions (user_id TEXT NOT NULL REFERENCES users(id), symbol TEXT NOT NULL, quantity INTEGER NOT NULL DEFAULT 0, average_price INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, symbol))`,
   `CREATE TABLE IF NOT EXISTS paper_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), participant_id TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, order_type TEXT NOT NULL, time_in_force TEXT NOT NULL, price INTEGER, stop_price INTEGER, quantity INTEGER NOT NULL, remaining INTEGER NOT NULL, status TEXT NOT NULL, sequence INTEGER NOT NULL, accepted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS paper_executions (id TEXT PRIMARY KEY, engine_execution_id TEXT NOT NULL, symbol TEXT NOT NULL, price INTEGER NOT NULL, quantity INTEGER NOT NULL, buy_order_id TEXT NOT NULL, sell_order_id TEXT NOT NULL, buy_user_id TEXT NOT NULL, sell_user_id TEXT NOT NULL, executed_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS order_idempotency (user_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, status_code INTEGER NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, idempotency_key))`,
+  `CREATE TABLE IF NOT EXISTS venue_control (venue TEXT PRIMARY KEY, phase TEXT NOT NULL, halt_mode TEXT NOT NULL DEFAULT 'OPEN', reason TEXT, version INTEGER NOT NULL DEFAULT 1, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS audit_chain (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, previous_hash TEXT NOT NULL, entry_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
 ];
 
 const indexes = [
@@ -39,6 +43,9 @@ const indexes = [
   `CREATE INDEX IF NOT EXISTS idx_paper_executions_sell_user_time ON paper_executions(sell_user_id, executed_at)`,
   `CREATE INDEX IF NOT EXISTS idx_paper_executions_symbol_time ON paper_executions(symbol, executed_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_user_time ON audit_log(user_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_chain_user_time ON audit_chain(user_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_idempotency_created_at ON order_idempotency(created_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_operator ON users(role) WHERE role='operator'`,
 ];
 
 function postgresSql(sql: string) {
@@ -109,6 +116,7 @@ export async function ensureTradingSchema() {
         ? `CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`
         : `CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`;
       await db.batch([...commonSchema, auditSql, ...indexes].map((sql) => ({ sql })));
+      await db.query(`INSERT INTO venue_control (venue, phase, halt_mode, reason, version, updated_by, updated_at) VALUES ('NEXTRADE', 'CONTINUOUS', 'OPEN', NULL, 1, 'SYSTEM', ?) ON CONFLICT(venue) DO NOTHING`, [new Date().toISOString()]);
       if (db.kind === "d1") await db.query("PRAGMA optimize");
     })().catch((error) => {
       schemaReady = null;
@@ -134,7 +142,9 @@ export async function ensurePaperUser(user: ChatGPTUser) {
     { sql: `INSERT INTO paper_accounts (user_id, participant_id, cash_balance, created_at) VALUES (?, ?, 100000000, ?) ON CONFLICT(user_id) DO NOTHING`, params: [user.userId, participantId, now] },
     ...NEXTRADE_INSTRUMENTS.map((instrument) => ({ sql: `INSERT INTO paper_positions (user_id, symbol, quantity, average_price, updated_at) VALUES (?, ?, 100, ?, ?) ON CONFLICT(user_id, symbol) DO NOTHING`, params: [user.userId, instrument.symbol, instrument.basePrice ?? 0, now] })),
   ]);
-  return { participantId };
+  await db.query(`UPDATE users SET role='operator' WHERE id=? AND NOT EXISTS (SELECT 1 FROM users WHERE role='operator')`, [user.userId]);
+  const role = (await db.query<{ role: "operator" | "participant" }>(`SELECT role FROM users WHERE id=?`, [user.userId])).rows[0]?.role ?? "participant";
+  return { participantId, role };
 }
 
 export async function getPaperAccount(userId: string): Promise<PaperAccountView> {
@@ -190,7 +200,15 @@ export async function saveExecution(execution: Execution) {
 export async function addAudit(userId: string, action: string, entityId: string | null, payload: unknown) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  await db.query(`INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`, [userId, action, entityId, JSON.stringify(payload), new Date().toISOString()]);
+  const createdAt = new Date().toISOString();
+  const payloadJson = JSON.stringify(payload);
+  const previousHash = (await db.query<{ entryHash: string }>(`SELECT entry_hash AS "entryHash" FROM audit_chain WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, [userId])).rows[0]?.entryHash ?? "GENESIS";
+  const entryHash = await computeAuditEntryHash(previousHash, userId, action, entityId, payloadJson, createdAt);
+  const id = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+  await db.batch([
+    { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`, params: [userId, action, entityId, payloadJson, createdAt] },
+    { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, params: [id, userId, action, entityId, payloadJson, previousHash, entryHash, createdAt] },
+  ]);
 }
 
 export async function listUserTradingState(userId: string) {
@@ -212,12 +230,68 @@ export async function listUserAudit(userId: string, limit = 50) {
   await ensureTradingSchema();
   const db = await getAdapter();
   const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
-  const result = await db.query<{ id: number; action: string; entityId: string | null; payloadJson: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", created_at AS "createdAt" FROM audit_log WHERE user_id=? ORDER BY id DESC LIMIT ${safeLimit}`, [userId]);
+  const result = await db.query<{ id: string; action: string; entityId: string | null; payloadJson: string; entryHash: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", entry_hash AS "entryHash", created_at AS "createdAt" FROM audit_chain WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT ${safeLimit}`, [userId]);
   return result.rows.map((row) => {
     let payload: unknown = null;
     try { payload = JSON.parse(row.payloadJson); } catch { payload = null; }
-    return { id: Number(row.id), action: row.action, entityId: row.entityId, payload, createdAt: row.createdAt };
+    return { id: row.id, action: row.action, entityId: row.entityId, payload, entryHash: row.entryHash, createdAt: row.createdAt };
   });
+}
+
+export type VenueHaltMode = "OPEN" | "CANCEL_ONLY" | "FULL_STOP";
+export type VenueControlState = { venue: "NEXTRADE"; phase: MarketPhase; haltMode: VenueHaltMode; reason: string | null; version: number; updatedBy: string; updatedAt: string };
+
+export async function getVenueControl(): Promise<VenueControlState> {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const row = (await db.query<{ venue: "NEXTRADE"; phase: MarketPhase; haltMode: VenueHaltMode; reason: string | null; version: number; updatedBy: string; updatedAt: string }>(`SELECT venue, phase, halt_mode AS "haltMode", reason, version, updated_by AS "updatedBy", updated_at AS "updatedAt" FROM venue_control WHERE venue='NEXTRADE'`)).rows[0];
+  if (!row) throw new Error("venue control state is unavailable");
+  return { ...row, version: Number(row.version) };
+}
+
+export async function updateVenueControl(input: { phase: MarketPhase; haltMode: VenueHaltMode; reason?: string | null; expectedVersion: number; updatedBy: string }) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const result = await db.query(`UPDATE venue_control SET phase=?, halt_mode=?, reason=?, version=version+1, updated_by=?, updated_at=? WHERE venue='NEXTRADE' AND version=?`, [input.phase, input.haltMode, input.reason ?? null, input.updatedBy, new Date().toISOString(), input.expectedVersion]);
+  if (result.changes !== 1) return null;
+  return getVenueControl();
+}
+
+export async function getUserRole(userId: string): Promise<"operator" | "participant"> {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  return (await db.query<{ role: "operator" | "participant" }>(`SELECT role FROM users WHERE id=?`, [userId])).rows[0]?.role ?? "participant";
+}
+
+export async function getIdempotencyRecord(userId: string, key: string) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  return (await db.query<{ requestHash: string; statusCode: number; responseJson: string }>(`SELECT request_hash AS "requestHash", status_code AS "statusCode", response_json AS "responseJson" FROM order_idempotency WHERE user_id=? AND idempotency_key=?`, [userId, key])).rows[0] ?? null;
+}
+
+export async function saveIdempotencyRecord(userId: string, key: string, requestHash: string, statusCode: number, response: unknown) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  await db.query(`INSERT INTO order_idempotency (user_id, idempotency_key, request_hash, status_code, response_json, created_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(user_id, idempotency_key) DO NOTHING`, [userId, key, requestHash, statusCode, JSON.stringify(response), new Date().toISOString()]);
+}
+
+export async function verifyAuditChain(userId: string) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const rows = await db.query<{ id: string; action: string; entityId: string | null; payloadJson: string; previousHash: string; entryHash: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", previous_hash AS "previousHash", entry_hash AS "entryHash", created_at AS "createdAt" FROM audit_chain WHERE user_id=? ORDER BY created_at ASC, id ASC LIMIT 2000`, [userId]);
+  let previousHash = "GENESIS";
+  for (const row of rows.rows) {
+    const expected = await computeAuditEntryHash(previousHash, userId, row.action, row.entityId, row.payloadJson, row.createdAt);
+    if (row.previousHash !== previousHash || row.entryHash !== expected) return { ok: false, checked: rows.rows.length, failedAt: row.id };
+    previousHash = row.entryHash;
+  }
+  return { ok: true, checked: rows.rows.length, head: previousHash };
+}
+
+export async function computeAuditEntryHash(previousHash: string, userId: string, action: string, entityId: string | null, payloadJson: string, createdAt: string) {
+  const value = [previousHash, userId, action, entityId ?? "", payloadJson, createdAt].join("|");
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export async function getPersistenceHealth() {

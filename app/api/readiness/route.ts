@@ -17,16 +17,21 @@ export async function GET() {
     broker,
     persistence,
     engine: {
-      status: "ready",
+      status: runtime.venueControl?.haltMode === "OPEN" ? "ready" : "halted",
       sequence: runtime.engine.sequenceNumber,
       market: runtime.engine.getMarketState(),
       recoveredOrders: runtime.orders.size,
+      venueControl: runtime.venueControl,
     },
     safeguards: {
       mutationSerialization: true,
       durableOrderJournal: true,
       authenticatedOwnership: true,
       selfTradePolicy: "CANCEL_TAKER",
+      idempotencyRequired: true,
+      orderRateLimit: "40 mutations / 10 seconds / user",
+      realtimeStream: "SSE",
+      chainedAudit: true,
     },
     configuredConnection: redactBrokerConfig(),
   }, {

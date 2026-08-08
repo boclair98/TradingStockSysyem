@@ -32,6 +32,10 @@
 - 사용자별 예약금액·미체결 한도·감사기록 운영 화면
 - 인증된 사용자 전용 리스크·감사 API와 서버 일괄취소
 - 데이터베이스 응답시간·복구 주문수·안전장치 readiness 진단
+- `Idempotency-Key` 기반 중복 주문 방지와 사용자별 주문 속도제한
+- SSE 기반 실시간 호가·체결 변경 알림과 자동 재연결
+- 운영자 전용 정상거래·취소전용·전면정지 제어와 낙관적 버전 잠금
+- 사용자별 SHA-256 해시체인 감사기록 및 무결성 검증
 
 ## 구성
 
@@ -105,8 +109,11 @@ DELETE /api/orders (현재 사용자의 미체결 전체취소)
 DELETE /api/orders/{orderId}
 POST   /api/orders/{orderId} (정정)
 GET    /api/events?afterSequence=0
+GET    /api/stream (SSE 실시간 이벤트)
 GET    /api/risk
 GET    /api/audit?limit=50
+GET    /api/operations/venue
+PATCH  /api/operations/venue (운영자 전용)
 GET    /api/broker/quote?symbol=005930
 GET    /api/broker/account?participantId=api-paper
 ```
@@ -128,6 +135,17 @@ GET    /api/broker/account?participantId=api-paper
   "quantity": 10
 }
 ```
+
+`POST /api/orders`에는 최대 128자의 `Idempotency-Key` 헤더가 필수입니다. 동일 키와 동일
+요청은 최초 결과를 재전송하고, 동일 키에 다른 주문을 보내면 `409`로 거부합니다. 주문·정정·
+취소 변경 요청은 사용자별 10초당 40회로 제한됩니다.
+
+시장 운영 상태는 `OPEN`, `CANCEL_ONLY`, `FULL_STOP`으로 구분합니다. 취소전용 상태에서는
+신규·정정은 차단하고 기존 주문 취소만 허용하며, 전면정지에서는 취소까지 차단합니다. 이는
+[KRX가 안내하는 시장 전체 정지 단계](https://global.krx.co.kr/contents/GLB/06/0602/0602010204/GLB0602010204T2.jsp)를
+운영 통제 모델에 반영한 것입니다. 넥스트레이드의 08:00~20:00 운영, 중간가·스톱지정가,
+가격제한폭과 시장안정장치 적용 범위는
+[금융위원회 공식 안내](https://www.fsc.go.kr/no010101/83953)를 기준으로 구성했습니다.
 
 중간가 주문은 `type`을 `MIDPOINT`로 지정하고 가격을 생략합니다. 현재 호가창에 양쪽
 호가가 모두 있을 때 기준 중간가격으로 가상 주문을 생성합니다. 스톱지정가는 `type`을

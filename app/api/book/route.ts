@@ -14,6 +14,7 @@ export async function GET(request: Request) {
     mode: "paper",
     instrument,
     market: runtime.engine.getMarketState(),
+    venueControl: runtime.venueControl,
     book: runtime.engine.snapshot(symbol),
   }, {
     headers: { "Cache-Control": "no-store" },

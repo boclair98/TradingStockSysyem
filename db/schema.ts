@@ -72,3 +72,36 @@ export const auditLog = sqliteTable("audit_log", {
   payloadJson: text("payload_json").notNull(),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("idx_audit_log_user_time").on(table.userId, table.createdAt)]);
+
+export const orderIdempotency = sqliteTable("order_idempotency", {
+  userId: text("user_id").notNull(),
+  idempotencyKey: text("idempotency_key").notNull(),
+  requestHash: text("request_hash").notNull(),
+  statusCode: integer("status_code").notNull(),
+  responseJson: text("response_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.idempotencyKey] }),
+  index("idx_idempotency_created_at").on(table.createdAt),
+]);
+
+export const venueControl = sqliteTable("venue_control", {
+  venue: text("venue").primaryKey(),
+  phase: text("phase").notNull(),
+  haltMode: text("halt_mode").notNull().default("OPEN"),
+  reason: text("reason"),
+  version: integer("version").notNull().default(1),
+  updatedBy: text("updated_by").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const auditChain = sqliteTable("audit_chain", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull(),
+  action: text("action").notNull(),
+  entityId: text("entity_id"),
+  payloadJson: text("payload_json").notNull(),
+  previousHash: text("previous_hash").notNull(),
+  entryHash: text("entry_hash").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("idx_audit_chain_user_time").on(table.userId, table.createdAt)]);

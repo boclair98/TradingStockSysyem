@@ -27,11 +27,11 @@ export async function GET(request: Request) {
   if (!user) {
     return Response.json({ authenticated: false, signInPath: paths.signInPath }, { status: 401, headers: { "Cache-Control": "no-store" } });
   }
-  const { participantId } = await ensurePaperUser(user);
+  const { participantId, role } = await ensurePaperUser(user);
   const account = await getPaperAccount(user.userId);
   return Response.json({
     authenticated: true,
-    user: { displayName: user.displayName, email: user.email, participantId, role: "participant" },
+    user: { displayName: user.displayName, email: user.email, participantId, role },
     account,
     signOutPath: paths.signOutPath,
   }, { headers: { "Cache-Control": "no-store" } });

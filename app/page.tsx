@@ -23,7 +23,9 @@ type RiskView = {
   risk: { halted: boolean; openOrders: number; limits: { maxOrderQuantity: number; maxOrderNotional: number; maxOpenOrders: number } };
   exposure: { reservedCash: number; reservedCashPercent: number; openOrderUtilizationPercent: number };
 };
-type AuditEntry = { id: number; action: string; entityId: string | null; payload: unknown; createdAt: string };
+type AuditEntry = { id: string; action: string; entityId: string | null; payload: unknown; entryHash: string; createdAt: string };
+type AuditIntegrity = { ok: boolean; checked: number; head?: string; failedAt?: string };
+type VenueControlView = { venue: "NEXTRADE"; phase: MarketPhase; haltMode: "OPEN" | "CANCEL_ONLY" | "FULL_STOP"; reason: string | null; version: number; updatedAt: string };
 type SessionView = {
   authenticated: boolean;
   user: { displayName: string; email: string; participantId: string; role: string };
@@ -52,6 +54,10 @@ export default function Home() {
   const [readiness, setReadiness] = useState<ReadinessView | null>(null);
   const [riskView, setRiskView] = useState<RiskView | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
+  const [auditIntegrity, setAuditIntegrity] = useState<AuditIntegrity | null>(null);
+  const [venueControl, setVenueControl] = useState<VenueControlView | null>(null);
+  const [streamConnected, setStreamConnected] = useState(false);
+  const [streamRevision, setStreamRevision] = useState(0);
   const [session, setSession] = useState<SessionView | null>(null);
   const [signInRequired, setSignInRequired] = useState(false);
   const [signInPath, setSignInPath] = useState("/signin-with-chatgpt?return_to=%2F");
@@ -68,6 +74,17 @@ export default function Home() {
       })
       .catch(() => undefined);
     return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    const source = new EventSource("/api/stream");
+    const refresh = () => setStreamRevision((value) => value + 1);
+    source.onopen = () => setStreamConnected(true);
+    source.onerror = () => setStreamConnected(false);
+    source.addEventListener("ready", refresh);
+    source.addEventListener("market", refresh);
+    source.addEventListener("book", refresh);
+    return () => source.close();
   }, []);
 
   useEffect(() => {
@@ -103,13 +120,15 @@ export default function Home() {
           requests.push(fetch("/api/orders", { cache: "no-store" }));
           requests.push(fetch("/api/risk", { cache: "no-store" }));
           requests.push(fetch("/api/audit?limit=30", { cache: "no-store" }));
+          requests.push(fetch("/api/operations/venue", { cache: "no-store" }));
         }
-        const [bookResponse, ordersResponse, riskResponse, auditResponse] = await Promise.all(requests);
+        const [bookResponse, ordersResponse, riskResponse, auditResponse, venueResponse] = await Promise.all(requests);
         if (!active) return;
         if (bookResponse.ok) {
           const payload = await bookResponse.json();
           setBook(payload.book);
           if (payload.market?.phase) setMarketPhase(payload.market.phase);
+          if (payload.venueControl) setVenueControl(payload.venueControl);
         }
         if (ordersResponse?.ok) {
           const payload = await ordersResponse.json();
@@ -122,6 +141,11 @@ export default function Home() {
         if (auditResponse?.ok) {
           const payload = await auditResponse.json();
           setAuditEntries(payload.entries ?? []);
+          setAuditIntegrity(payload.integrity ?? null);
+        }
+        if (venueResponse?.ok) {
+          const payload = await venueResponse.json();
+          setVenueControl(payload.control ?? null);
         }
       } catch {
         if (active) setMessage("공유 시장 연결을 다시 확인하는 중");
@@ -130,7 +154,7 @@ export default function Home() {
     void load();
     const timer = window.setInterval(load, 1500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [selectedSymbol, Boolean(session)]);
+  }, [selectedSymbol, Boolean(session), streamRevision]);
 
   const selectedInstrument = instrumentFor(selectedSymbol);
   const visibleTrades = trades.filter((trade) => trade.symbol === selectedSymbol);
@@ -168,7 +192,7 @@ export default function Home() {
     setMessage("서버 주문 게이트웨이에 전송 중");
     const response = await fetch("/api/orders", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Idempotency-Key": crypto.randomUUID() },
       body: JSON.stringify({
         symbol: selectedSymbol,
         side,
@@ -247,6 +271,25 @@ export default function Home() {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  async function changeVenueControl(phase: MarketPhase, haltMode: VenueControlView["haltMode"]) {
+    if (!venueControl || session?.user.role !== "operator") return;
+    if (haltMode === "FULL_STOP" && !window.confirm("전면정지 중에는 신규·정정·취소 주문이 모두 차단됩니다. 실행할까요?")) return;
+    const response = await fetch("/api/operations/venue", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ phase, haltMode, expectedVersion: venueControl.version, reason: haltMode === "OPEN" ? null : haltMode === "CANCEL_ONLY" ? "운영자 취소전용 전환" : "운영자 전면정지" }),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      if (payload.control) setVenueControl(payload.control);
+      setMessage(`시장통제 실패 · ${payload.error ?? "control rejected"}`);
+      return;
+    }
+    setVenueControl(payload.control);
+    setMarketPhase(payload.control.haltMode === "OPEN" ? payload.control.phase : "CLOSED");
+    setMessage(`시장통제 반영 · ${payload.control.phase} / ${payload.control.haltMode}`);
+  }
+
   return (
     <main className="terminal-shell">
       <aside className="side-rail">
@@ -277,20 +320,22 @@ export default function Home() {
 
           <section className="feed-warning"><span className="warning-icon">P</span><div><strong>공유 모의시장 · 실제 자금이 사용되지 않습니다.</strong><span>모든 주문은 로그인한 참가자의 모의계좌로 접수되고 동일한 서버 주문장에서 가격·시간 우선으로 체결됩니다.</span></div></section>
 
-          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>BROKER GATEWAY</span><strong>{brokerView.provider.toUpperCase()} · {brokerView.mode.toUpperCase()}</strong></div><div><span>TARGET VENUE</span><strong>{brokerView.venuePreference} · KRX/NEXTRADE</strong></div><div className="profile-lock"><span className={`tiny-dot ${marketPhase === "CLOSED" ? "amber" : "green"}`} /> {marketPhase === "CLOSED" ? "ORDER GATE CLOSED" : "ORDER GATE OPEN"}</div></section>
+          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>BROKER GATEWAY</span><strong>{brokerView.provider.toUpperCase()} · {brokerView.mode.toUpperCase()}</strong></div><div><span>TARGET VENUE</span><strong>{brokerView.venuePreference} · KRX/NEXTRADE</strong></div><div className="profile-lock"><span className={`tiny-dot ${venueControl?.haltMode === "OPEN" ? "green" : "amber"}`} /> {venueControl?.haltMode === "FULL_STOP" ? "VENUE FULL STOP" : venueControl?.haltMode === "CANCEL_ONLY" ? "CANCEL ONLY" : "ORDER GATE OPEN"}</div></section>
 
           <section className="operations-strip" id="system-monitor" aria-label="운영 상태">
             <div><span>서비스 상태</span><strong className={readiness?.ok ? "positive" : "sell-color"}>{readiness?.ok ? "정상" : "확인 중"}</strong><small>readiness gate</small></div>
             <div><span>주문 저널</span><strong>{readiness?.persistence.ok ? readiness.persistence.provider.toUpperCase() : "—"}</strong><small>{readiness?.persistence.ok ? `${readiness.persistence.latencyMs}ms 응답` : "영속 저장소 확인"}</small></div>
             <div><span>복구 미체결</span><strong>{formatNumber(readiness?.engine.recoveredOrders ?? 0)}건</strong><small>원본 우선순위 유지</small></div>
             <div><span>동시 주문 보호</span><strong>{readiness?.safeguards.mutationSerialization ? "직렬 처리" : "—"}</strong><small>잔고·체결 원자 경계</small></div>
-            <div><span>외부 연결</span><strong className="muted">대기</strong><small>API 입력 후 어댑터 활성화</small></div>
+            <div><span>실시간 이벤트</span><strong className={streamConnected ? "positive" : "muted"}>{streamConnected ? "연결됨" : "재연결 중"}</strong><small>SSE · 자동 복구</small></div>
           </section>
+
+          {session?.user.role === "operator" && venueControl ? <section className="operator-control" aria-label="운영자 시장 통제"><div><span className="section-kicker">OPERATOR CONTROL</span><strong>{venueControl.phase} · {venueControl.haltMode}</strong><small>version {venueControl.version} · 모든 변경은 해시 감사기록에 남습니다.</small></div><div className="operator-actions"><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "PRE_MARKET" ? "active" : ""} onClick={() => changeVenueControl("PRE_MARKET", "OPEN")}>PRE</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "CONTINUOUS" ? "active" : ""} onClick={() => changeVenueControl("CONTINUOUS", "OPEN")}>정상 거래</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeVenueControl("AFTER_MARKET", "OPEN")}>AFTER</button><button type="button" className={venueControl.haltMode === "CANCEL_ONLY" ? "cancel-only active" : "cancel-only"} onClick={() => changeVenueControl("CLOSED", "CANCEL_ONLY")}>취소전용</button><button type="button" className={venueControl.haltMode === "FULL_STOP" ? "full-stop active" : "full-stop"} onClick={() => changeVenueControl("CLOSED", "FULL_STOP")}>전면정지</button></div></section> : null}
 
           <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">VENUE SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>NEXTRADE · local control plane</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className="auction-run" onClick={runAuctionCycle} disabled={marketPhase !== "OPENING_AUCTION" && marketPhase !== "CLOSING_AUCTION"}>RUN AUCTION</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
 
           <section className="kpi-row" aria-label="엔진 상태">
-            <div className="kpi-card"><span className="kpi-label">엔진 상태</span><strong className="status-text">READY</strong><span className="kpi-trend">seq {formatNumber(book.sequence)}</span></div>
+            <div className="kpi-card"><span className="kpi-label">엔진 상태</span><strong className={venueControl?.haltMode === "OPEN" ? "status-text" : "sell-color"}>{venueControl?.haltMode === "OPEN" ? "READY" : venueControl?.haltMode ?? "READY"}</strong><span className="kpi-trend">seq {formatNumber(book.sequence)}</span></div>
             <div className="kpi-card"><span className="kpi-label">활성 매수 잔량</span><strong>{formatNumber(totalBid)}<span className="unit">주</span></strong><span className="kpi-trend">{book.bids.length}개 주문</span></div>
             <div className="kpi-card"><span className="kpi-label">활성 매도 잔량</span><strong>{formatNumber(totalAsk)}<span className="unit">주</span></strong><span className="kpi-trend">{book.asks.length}개 주문</span></div>
             <div className="kpi-card"><span className="kpi-label">누적 체결 이벤트</span><strong>{formatNumber(visibleTrades.length)}<span className="unit">건</span></strong><span className="kpi-trend">{selectedInstrument.displayName}</span></div>
@@ -316,7 +361,7 @@ export default function Home() {
                 <button className={`submit-order ${side === "BUY" ? "buy" : "sell"}`} type="submit" disabled={!session}>{session ? (side === "BUY" ? "매수 주문" : "매도 주문") : "로그인 후 주문"}<span>⌘ ↵</span></button>
               </form>
               <div className="engine-message" aria-live="polite"><span className="tiny-dot green" />{message}</div>
-              <div className="risk-check" id="risk-controls"><div className="risk-title"><span>사전 리스크 체크</span><span className={riskView?.risk.halted ? "sell-color" : "positive"}>{riskView?.risk.halted ? "HALTED" : "ACTIVE"}</span></div><div className="risk-row"><span>미체결 주문</span><span>{formatNumber(riskView?.risk.openOrders ?? 0)} / {formatNumber(riskView?.risk.limits.maxOpenOrders ?? 1000)}건</span></div><div className="risk-meter"><span style={{ width: `${Math.min(100, riskView?.exposure.openOrderUtilizationPercent ?? 0)}%` }} /></div><div className="risk-row"><span>예약 주문금액</span><span>{formatNumber(riskView?.exposure.reservedCash ?? 0)}원 · {riskView?.exposure.reservedCashPercent ?? 0}%</span></div><div className="risk-row"><span>주문당 최대수량</span><span>{formatNumber(riskView?.risk.limits.maxOrderQuantity ?? 100000)}주</span></div><div className="risk-row"><span>주문당 최대금액</span><span>{formatNumber(riskView?.risk.limits.maxOrderNotional ?? 1000000000)}원</span></div><div className="risk-row"><span>자기체결 방지</span><span>CANCEL_TAKER</span></div></div>
+              <div className="risk-check" id="risk-controls"><div className="risk-title"><span>사전 리스크 체크</span><span className={riskView?.risk.halted ? "sell-color" : "positive"}>{riskView?.risk.halted ? "HALTED" : "ACTIVE"}</span></div><div className="risk-row"><span>미체결 주문</span><span>{formatNumber(riskView?.risk.openOrders ?? 0)} / {formatNumber(riskView?.risk.limits.maxOpenOrders ?? 1000)}건</span></div><div className="risk-meter"><span style={{ width: `${Math.min(100, riskView?.exposure.openOrderUtilizationPercent ?? 0)}%` }} /></div><div className="risk-row"><span>예약 주문금액</span><span>{formatNumber(riskView?.exposure.reservedCash ?? 0)}원 · {riskView?.exposure.reservedCashPercent ?? 0}%</span></div><div className="risk-row"><span>주문당 최대수량</span><span>{formatNumber(riskView?.risk.limits.maxOrderQuantity ?? 100000)}주</span></div><div className="risk-row"><span>주문당 최대금액</span><span>{formatNumber(riskView?.risk.limits.maxOrderNotional ?? 1000000000)}원</span></div><div className="risk-row"><span>감사 무결성</span><span className={auditIntegrity?.ok ? "positive" : "sell-color"}>{auditIntegrity?.ok ? `${auditIntegrity.checked}건 검증` : "확인 중"}</span></div><div className="risk-row"><span>자기체결 방지</span><span>CANCEL_TAKER</span></div></div>
             </section>
 
             <section className="panel book-panel">
