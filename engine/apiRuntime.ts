@@ -1,5 +1,6 @@
 import { MatchingEngine, type Execution, type Order, type SubmitOrderInput } from "./matchingEngine";
 import { NEXTRADE_INSTRUMENTS } from "./instrumentMaster";
+import { listOpenOrdersForHydration } from "../db/trading";
 
 export interface PaperRuntime {
   engine: MatchingEngine;
@@ -21,6 +22,37 @@ export const getPaperRuntime = (): PaperRuntime => {
   }
   return globalRuntime.__tradingStockSysyemPaperRuntime;
 };
+
+let hydrationPromise: Promise<PaperRuntime> | null = null;
+
+export async function getHydratedPaperRuntime(): Promise<PaperRuntime> {
+  if (!hydrationPromise) {
+    hydrationPromise = (async () => {
+      const runtime = getPaperRuntime();
+      if (runtime.orders.size > 0 || runtime.engine.sequenceNumber > 0) return runtime;
+      const openOrders = await listOpenOrdersForHydration();
+      for (const order of openOrders) {
+        const result = runtime.engine.submit({
+          id: order.id,
+          symbol: order.symbol,
+          participantId: order.participantId,
+          side: order.side,
+          type: order.type,
+          timeInForce: order.timeInForce,
+          price: order.price,
+          stopPrice: order.stopPrice,
+          quantity: order.remaining,
+        });
+        if (result.order) runtime.orders.set(result.order.id, result.order);
+      }
+      return runtime;
+    })().catch((error) => {
+      hydrationPromise = null;
+      throw error;
+    });
+  }
+  return hydrationPromise;
+}
 
 export function submitPaperOrder(input: SubmitOrderInput) {
   const runtime = getPaperRuntime();

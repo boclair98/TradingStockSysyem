@@ -1,7 +1,9 @@
-import { getPaperRuntime, submitPaperOrder } from "../../../engine/apiRuntime";
+import { getHydratedPaperRuntime, submitPaperOrder } from "../../../engine/apiRuntime";
 import { getBrokerReadiness, toBrokerOrderEnvelope, type VenuePreference } from "../../../engine/brokerGateway";
 import type { OrderType, Side, TimeInForce } from "../../../engine/matchingEngine";
 import { instrumentFor } from "../../../engine/instrumentMaster";
+import { getChatGPTUser } from "../../chatgpt-auth";
+import { addAudit, ensurePaperUser, getPaperAccount, listUserTradingState, ownerForOrder, preTradeRiskCheck, saveExecution, savePaperOrder } from "../../../db/trading";
 
 export const dynamic = "force-dynamic";
 
@@ -26,22 +28,33 @@ const isTif = (value: unknown): value is TimeInForce => value === "GTC" || value
 const isVenuePreference = (value: unknown): value is VenuePreference => value === "AUTO" || value === "KRX" || value === "NEXTRADE";
 
 export async function GET() {
-  const runtime = getPaperRuntime();
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  await ensurePaperUser(user);
+  const runtime = await getHydratedPaperRuntime();
   const broker = getBrokerReadiness();
+  const state = await listUserTradingState(user.userId);
+  const account = await getPaperAccount(user.userId);
   return Response.json({
     targetVenue: "NEXTRADE",
     integrationModel: "securities_broker_api",
     broker: { provider: broker.provider, mode: broker.mode, status: broker.status },
     mode: "paper",
-    orders: [...runtime.orders.values()].slice(-100),
-    executions: runtime.executions.slice(0, 100),
-    events: runtime.engine.getEvents().slice(-100),
+    participantId: account.participantId,
+    account,
+    orders: state.orders,
+    executions: state.executions,
+    events: [],
   }, {
     headers: { "Cache-Control": "no-store" },
   });
 }
 
 export async function POST(request: Request) {
+  const user = await getChatGPTUser();
+  if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  const { participantId } = await ensurePaperUser(user);
+  const runtime = await getHydratedPaperRuntime();
   let payload: OrderPayload;
   try {
     payload = await request.json() as OrderPayload;
@@ -68,11 +81,17 @@ export async function POST(request: Request) {
   if (payload.venuePreference !== undefined && !isVenuePreference(payload.venuePreference)) return Response.json({ error: "venuePreference must be AUTO, KRX, or NEXTRADE" }, { status: 400 });
   if (!Number.isSafeInteger(payload.quantity) || (payload.quantity ?? 0) <= 0) return Response.json({ error: "quantity must be a positive integer" }, { status: 400 });
   const quantity = payload.quantity as number;
+  const referencePrice = payload.price ?? instrument.basePrice ?? 0;
+  const riskError = await preTradeRiskCheck(user.userId, payload.side, symbol, quantity, referencePrice);
+  if (riskError) {
+    await addAudit(user.userId, "ORDER_REJECTED", payload.id ?? null, { reason: riskError, symbol, side: payload.side, quantity });
+    return Response.json({ error: riskError }, { status: 422 });
+  }
 
   const normalizedOrder = {
     id: payload.id?.trim() || `API-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     symbol,
-    participantId: payload.participantId?.trim() || "api-paper",
+    participantId,
     side: payload.side,
     type: payload.type,
     timeInForce: payload.type === "MARKET" ? "IOC" : payload.timeInForce ?? "GTC",
@@ -84,6 +103,18 @@ export async function POST(request: Request) {
   } as const;
   const result = submitPaperOrder(normalizedOrder);
   const brokerOrder = toBrokerOrderEnvelope(normalizedOrder);
+
+  if (result.order) await savePaperOrder(user.userId, result.order);
+  for (const execution of result.executions) {
+    for (const orderId of [execution.buyOrderId, execution.sellOrderId]) {
+      const order = runtime.engine.getOrder(orderId);
+      if (!order) continue;
+      const owner = await ownerForOrder(orderId);
+      await savePaperOrder(owner?.userId ?? user.userId, order);
+    }
+    await saveExecution(execution);
+  }
+  await addAudit(user.userId, result.accepted ? "ORDER_ACCEPTED" : "ORDER_REJECTED", result.order?.id ?? normalizedOrder.id, { symbol, side: payload.side, quantity, executions: result.executions.length, reason: result.reason ?? null });
 
   return Response.json({ targetVenue: brokerOrder.venuePreference, integrationModel: "securities_broker_api", broker: broker.provider, mode: "paper", brokerOrder, ...result }, {
     status: result.accepted ? 201 : 422,

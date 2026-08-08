@@ -1,4 +1,4 @@
-import { getPaperRuntime } from "../../../engine/apiRuntime";
+import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
 
 export const dynamic = "force-dynamic";
 
@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) {
     return Response.json({ error: "afterSequence must be a non-negative integer" }, { status: 400 });
   }
-  const runtime = getPaperRuntime();
+  const runtime = await getHydratedPaperRuntime();
   return Response.json({
     venue: "NEXTRADE",
     mode: "paper",

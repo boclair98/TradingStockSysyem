@@ -1,4 +1,4 @@
-import { getPaperRuntime } from "../../../engine/apiRuntime";
+import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
 import { instrumentFor } from "../../../engine/instrumentMaster";
 
 export async function GET(request: Request) {
@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     return Response.json({ error: "symbol is required or unsupported" }, { status: 400 });
   }
 
-  const runtime = getPaperRuntime();
+  const runtime = await getHydratedPaperRuntime();
   return Response.json({
     venue: "NEXTRADE",
     mode: "paper",
