@@ -1,84 +1,90 @@
 # TradingStockSysyem
 
-국내 주식시장과 대체거래소(ATS) 환경을 가정한 매매체결 시스템 연구·검증 프로젝트입니다.
-가격·시간 우선 매칭엔진과 한국시장 세션 규칙을 브라우저 운영 콘솔에서 확인할 수 있으며,
-현재는 외부 거래소 API 없이 가상 주문만 처리합니다.
+국내 ATS(다자간매매체결회사)를 목표로 하는 매매체결 코어, 회원사 적합성 게이트웨이, 운영 통제·감사 UI 프로젝트입니다.
 
-> **중요:** 이 프로젝트는 실거래소나 증권계좌에 연결되어 있지 않습니다. 현재 입력되는 주문과
-> 호가는 검증을 위한 로컬/가상 데이터이며, 실제 주문·청산·결제를 수행하지 않습니다.
+공개 기술실사 환경: <https://tradingstocksysyem.coders.kr/>
 
-## 공개 데모
+> **현재 판정: Engineering Evaluation Build.** 금융기관 PoC·코드 실사에는 사용할 수 있지만, 인가·회원사 적합성·시장감시·청산결제·이중센터 인증 전에는 실제 거래소로 운영하거나 “운영 인증 완제품”으로 판매할 수 없습니다.
 
-- [TradingStockSysyem 운영 콘솔](https://tradingstocksysyem.coders.kr/)
+## 왜 다시 구성했는가
 
-화면 상단의 종목 선택기에서 삼성전자, SK하이닉스, NAVER, 현대차, 카카오, KODEX 200을
-가상 종목으로 전환할 수 있습니다. 종목별로 호가창, 주문 입력, 체결 이벤트가 분리됩니다.
+개인 사용자의 증권사 App Key를 받아 주문을 중계하는 서비스는 거래소가 아닙니다. 실제 ATS에서는 증권사가 회원으로 접속하고 ATS가 다수 회원의 주문을 독립적으로 체결한 뒤 시장정보·체결보고·감시·청산결제 경계로 전달합니다.
 
-## 주요 기능
+따라서 프로젝트를 다음처럼 분리했습니다.
 
-- 가격·시간 우선(price/time priority) 매칭
-- 지정가·시장가 주문
-- GTC·IOC·FOK 유효조건
-- 주문 취소·정정 및 미체결 전체취소
-- `CANCEL_TAKER` 자기체결 방지 정책
-- 집계 호가창과 append-only 체결/감사 이벤트
-- 개장·종가 동시호가와 단일가 경매(uncrossing)
-- NEXTRADE ATS 세션 상태와 주문 게이트
-- KOSPI/KOSDAQ 가격대별 호가단위와 가격제한폭 검증
-- KRX/NEXTRADE 후보 호가를 비교하는 결정론적 SOR 함수
-- API 연결 전 검증을 위한 다중 가상 종목 마스터
+- `venue-core-java/`: API·웹·DB에서 분리된 Java 21 결정론적 매칭 코어
+- `engine/memberGateway.ts`: 회원사 세션·순번·인증·중복·속도 적합성 게이트
+- `engine/matchingEngine.ts`: 브라우저와 규칙 검증용 TypeScript 참조 엔진
+- `db/`: 시험 원장·Drop Copy·감사 해시체인·운영 상태
+- `app/`: 기술실사·운영 UI
+- `engine/liveTradingService.ts`: KIS 증권사 라우팅 실험 어댑터이며 ATS 코어와 분리
 
-## 구성
+## 독립 Venue Core
 
-```text
-app/page.tsx                    운영 콘솔 UI와 종목 선택/주문 입력
-engine/matchingEngine.ts        주문원장, 검증, 매칭, 경매, 이벤트 로그
-engine/koreanMarketRules.ts    한국시장 호가단위·세션·가격범위 규칙
-engine/smartOrderRouter.ts      KRX/NEXTRADE 최우선 후보 선택 로직
-tests/                          매칭엔진·한국시장 규칙 테스트
-coders.yaml                     coders.kr web 서비스 설정
-Dockerfile                      재현 가능한 컨테이너 빌드
+Java 21 코어는 다음을 구현합니다.
+
+- 정수 고정 가격·수량
+- 종목별 가격·시간 우선 CLOB
+- 지정가·보호가격 시장가, DAY·IOC·FOK
+- 회원별 중복 ClientOrderId 차단
+- CANCEL_AGGRESSOR 자기체결 방지
+- 신규·취소·정정, 정정 시 시간 우선순위 상실
+- 호가단위·수량단위·일일 가격범위
+- 회원별 주문수량·주문금액·미체결·킬 스위치
+- 전역 명령/이벤트 단조 증가 sequence
+- CRC32C 프레임과 `fsync` 명령 WAL
+- 저널 손상·부분 프레임·sequence gap 거부
+- 재기동 명령 재생과 SHA-256 상태 다이제스트 비교
+
+```powershell
+powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/test.ps1
+powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/benchmark.ps1
 ```
 
-## 로컬 실행
+2026-08-09 개발 PC 기준으로 10만 건 비체결 DAY 명령을 약 144,902 commands/s로 처리했습니다. 이는 네트워크·동기복제·시장정보 fan-out·장애전환을 제외한 로컬 기준선이며 거래소 SLA가 아닙니다.
 
-요구사항: Node.js `>=22.13.0`
+## 회원사 적합성 경계
 
-```bash
-npm install
-npm run dev
+- 회원/세션별 HMAC 인증 시험
+- 연속 inbound/outbound sequence
+- 중복 ClientOrderId 방지
+- 회원 세션별 속도제한
+- Execution Report와 Drop Copy
+- 시장정보 스냅샷과 시장 sequence
+- 취소전용·전면정지 운영 통제
+- PostgreSQL advisory fencing 시험
+- 주문·체결·감사 원장과 해시체인
+
+## 증권사 실계좌 어댑터
+
+한국투자증권 Open Trading API 기반 실전/모의 계좌, 잔고, 시세, KRX·NXT·SOR 주문, 취소, 체결대사 기능이 별도 실험 어댑터로 존재합니다.
+
+이 어댑터는 ATS 회원사 접속 인터페이스를 대체하지 않으며 거래소 data-plane과 함께 배포해서는 안 됩니다. 실전 주문은 서버 스위치, 사용자 위험동의, 킬 스위치 해제, 60초 주문 미리보기와 확인문구가 모두 통과해야 전송됩니다.
+
+## API가 아니라 먼저 필요한 자료
+
+1. 대상 기관 승인 회원 주문·정정·취소·세션·Drop Copy 프로토콜
+2. 종목·권리변동·시장상태·호가·체결 데이터 계약과 포맷
+3. 시장감시·규제보고·원본 보존 요구
+4. KRX/KSD 청산결제·대사·결제불이행 인터페이스
+5. 회원 수, 종목 수, 평균/피크 msg/s, p99.99 지연 목표
+6. RTO/RPO, 이중센터, 전용망, PKI/HSM, PTP 요구
+7. 승인 업무규정과 회원사 적합성 테스트 케이스
+
+## 문서
+
+- [거래소 납품 준비 갭 매트릭스](docs/EXCHANGE_PRODUCT_GAP_MATRIX.md)
+- [목표 ATS 제품 아키텍처](docs/EXCHANGE_ARCHITECTURE.md)
+- [장애전환·복구 Runbook](docs/FAILOVER_RUNBOOK.md)
+- [성능 기준선](docs/PERFORMANCE_BASELINE.md)
+- [운영 전환 경계](docs/PRODUCTION_READINESS.md)
+
+## 웹 검증
+
+```powershell
+npm.cmd run test:unit
+npx.cmd tsc --noEmit
+npm.cmd run build
 ```
 
-개발 서버는 기본적으로 `http://localhost:3000`에서 실행됩니다.
-
-## 검증 명령
-
-```bash
-npm run build
-npx eslint app/page.tsx engine/matchingEngine.ts
-```
-
-매칭엔진 테스트는 `tests/matchingEngine.test.ts`, 한국시장 규칙 테스트는
-`tests/koreanMarketRules.test.ts`에 있습니다.
-
-## API 연결 전후의 경계
-
-현재 엔진은 전송 계층과 분리된 순수 매칭 코어입니다. 실제 서비스를 준비할 때는 다음
-어댑터를 별도 서버 계층으로 연결해야 합니다.
-
-1. 실시간 시장데이터 수신(WebSocket/FIX 등)
-2. 주문 제출·취소·정정 게이트웨이(FIX/전용 API 등)
-3. 사용자 인증·계좌·잔고·권한 검사
-4. 사전 리스크 검사와 주문 한도
-5. 체결 저널 영속화, 장애 복구, 시간 동기화
-6. 청산·결제·감사 및 거래소 운영 연계
-
-API가 연결되기 전에는 현재의 가상 피드와 수동 주문 입력으로 매칭 규칙, 세션 전환,
-경매, 자기체결 방지, 오류 처리를 반복 검증할 수 있습니다. 실거래에 사용하려면 거래소/
-증권사 연동, 운영 이중화, 보안·감사 체계와 별도 적합성 검토가 필요합니다.
-
-## 배포
-
-`coders.yaml`과 `Dockerfile`은 coders.kr의 `web` 서비스 배포를 위한 설정입니다.
-배포 토큰이나 API 키는 저장소에 커밋하지 말고 호스팅 환경의 비밀값으로 관리해야 합니다.
-
+테스트나 CI에서는 실제 증권사 주문 엔드포인트를 호출하지 않습니다.

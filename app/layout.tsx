@@ -1,14 +1,22 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "TradingStockSysyem | Matching Core",
-  description: "TradingStockSysyem 개인용 매매체결 운영 콘솔. 가격·시간 우선 체결 규칙과 주문원장을 검증하며 외부 거래소 API는 아직 연결되지 않았습니다.",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
+  const origin = host ? `${protocol}://${host}` : "https://tradingstocksysyem.coders.kr";
+  const title = "TradingStockSysyem | ATS 매매체결 코어";
+  const description = "결정론적 가격·시간 우선 매칭, 회원사 주문 게이트웨이, 사전위험통제, 내구성 저널과 복구를 갖춘 ATS 기술실사·적합성 기준선.";
+  return {
+    title,
+    description,
+    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og-ats.png`, width: 1200, height: 630, alt: "TradingStockSysyem ATS venue core engineering evaluation" }] },
+    twitter: { card: "summary_large_image", title, description, images: [`${origin}/og-ats.png`] },
+  };
+}
 
 export default function RootLayout({
   children,

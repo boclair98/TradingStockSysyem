@@ -6,7 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
 
 COPY . .
-RUN npm run build
+RUN npx next build
 
 EXPOSE 3000
-CMD ["sh", "-c", "npx vinext start --host 0.0.0.0"]
+CMD ["sh", "-c", "npx next start -H 0.0.0.0 -p ${PORT:-3000}"]
