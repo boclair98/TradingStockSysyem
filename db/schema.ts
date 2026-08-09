@@ -105,3 +105,119 @@ export const auditChain = sqliteTable("audit_chain", {
   entryHash: text("entry_hash").notNull(),
   createdAt: text("created_at").notNull(),
 }, (table) => [index("idx_audit_chain_user_time").on(table.userId, table.createdAt)]);
+
+export const brokerConnections = sqliteTable("broker_connections", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  provider: text("provider").notNull(),
+  mode: text("mode").notNull().default("sandbox"),
+  accountLabel: text("account_label").notNull(),
+  accountRef: text("account_ref").notNull(),
+  credentialCiphertext: text("credential_ciphertext"),
+  status: text("status").notNull().default("pending"),
+  lastCheckedAt: text("last_checked_at"),
+  lastError: text("last_error"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_broker_connections_user_provider_account").on(table.userId, table.provider, table.accountRef),
+  index("idx_broker_connections_user_status").on(table.userId, table.status),
+]);
+
+export const automationStrategies = sqliteTable("automation_strategies", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  connectionId: text("connection_id"),
+  name: text("name").notNull(),
+  symbol: text("symbol").notNull(),
+  side: text("side").notNull(),
+  strategyType: text("strategy_type").notNull(),
+  triggerOperator: text("trigger_operator").notNull(),
+  triggerPrice: integer("trigger_price"),
+  orderType: text("order_type").notNull(),
+  limitPrice: integer("limit_price"),
+  quantity: integer("quantity").notNull(),
+  intervalSeconds: integer("interval_seconds").notNull().default(60),
+  maxOrdersPerDay: integer("max_orders_per_day").notNull().default(1),
+  maxDailyNotional: integer("max_daily_notional").notNull().default(1000000),
+  status: text("status").notNull().default("draft"),
+  executionMode: text("execution_mode").notNull().default("paper"),
+  lastEvaluatedAt: text("last_evaluated_at"),
+  lastTriggeredAt: text("last_triggered_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  index("idx_automation_strategies_user_status").on(table.userId, table.status),
+  index("idx_automation_strategies_due").on(table.status, table.lastEvaluatedAt),
+]);
+
+export const automationRuns = sqliteTable("automation_runs", {
+  id: text("id").primaryKey(),
+  strategyId: text("strategy_id").notNull(),
+  userId: text("user_id").notNull(),
+  status: text("status").notNull(),
+  observedPrice: integer("observed_price"),
+  orderId: text("order_id"),
+  detailJson: text("detail_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  index("idx_automation_runs_strategy_time").on(table.strategyId, table.createdAt),
+  index("idx_automation_runs_user_time").on(table.userId, table.createdAt),
+]);
+
+export const brokerRateWindows = sqliteTable("broker_rate_windows", {
+  provider: text("provider").notNull(),
+  connectionId: text("connection_id").notNull(),
+  rateGroup: text("rate_group").notNull(),
+  windowStartedAt: integer("window_started_at").notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+}, (table) => [primaryKey({ columns: [table.provider, table.connectionId, table.rateGroup] })]);
+
+export const memberGatewaySessions = sqliteTable("member_gateway_sessions", {
+  sessionId: text("session_id").primaryKey(),
+  memberId: text("member_id").notNull(),
+  protocol: text("protocol").notNull().default("NATIVE_JSON_1"),
+  status: text("status").notNull().default("ACTIVE"),
+  expectedInboundSequence: integer("expected_inbound_sequence").notNull().default(1),
+  outboundSequence: integer("outbound_sequence").notNull().default(1),
+  remoteAddress: text("remote_address"),
+  connectedAt: text("connected_at").notNull(),
+  lastHeartbeatAt: text("last_heartbeat_at").notNull(),
+}, (table) => [index("idx_gateway_sessions_member_status").on(table.memberId, table.status)]);
+
+export const gatewayMessages = sqliteTable("gateway_messages", {
+  id: text("id").primaryKey(),
+  memberId: text("member_id").notNull(),
+  sessionId: text("session_id").notNull(),
+  direction: text("direction").notNull(),
+  messageType: text("message_type").notNull(),
+  sessionSequence: integer("session_sequence").notNull(),
+  marketSequence: integer("market_sequence"),
+  clientOrderId: text("client_order_id"),
+  venueOrderId: text("venue_order_id"),
+  status: text("status").notNull(),
+  rejectCode: text("reject_code"),
+  payloadJson: text("payload_json").notNull(),
+  receivedAt: text("received_at").notNull(),
+  processedAt: text("processed_at"),
+  latencyMicros: integer("latency_micros"),
+}, (table) => [
+  uniqueIndex("idx_gateway_message_session_sequence").on(table.sessionId, table.direction, table.sessionSequence),
+  index("idx_gateway_message_member_clordid").on(table.memberId, table.clientOrderId),
+  index("idx_gateway_message_market_sequence").on(table.marketSequence),
+  index("idx_gateway_message_received_at").on(table.receivedAt),
+]);
+
+export const dropCopyEvents = sqliteTable("drop_copy_events", {
+  id: text("id").primaryKey(),
+  memberId: text("member_id").notNull(),
+  marketSequence: integer("market_sequence").notNull(),
+  eventType: text("event_type").notNull(),
+  orderId: text("order_id"),
+  executionId: text("execution_id"),
+  payloadJson: text("payload_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_drop_copy_member_sequence_event").on(table.memberId, table.marketSequence, table.eventType),
+  index("idx_drop_copy_member_time").on(table.memberId, table.createdAt),
+]);

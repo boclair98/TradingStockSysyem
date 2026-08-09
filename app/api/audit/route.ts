@@ -10,5 +10,5 @@ export async function GET(request: Request) {
   const rawLimit = Number(new URL(request.url).searchParams.get("limit") ?? "50");
   const limit = Number.isSafeInteger(rawLimit) ? rawLimit : 50;
   const [entries, integrity] = await Promise.all([listUserAudit(user.userId, limit), verifyAuditChain(user.userId)]);
-  return Response.json({ venue: "NEXTRADE", mode: "paper", integrity, entries }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ venue: "NEXTRADE", environment: "member_certification", integrity, entries }, { headers: { "Cache-Control": "no-store" } });
 }

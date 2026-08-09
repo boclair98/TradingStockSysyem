@@ -1,6 +1,7 @@
 import { MatchingEngine, type Execution, type Order, type SubmitOrderInput } from "./matchingEngine";
 import { NEXTRADE_INSTRUMENTS } from "./instrumentMaster";
 import { getVenueControl, listOpenOrdersForHydration, type VenueControlState } from "../db/trading";
+import { withDistributedEngineLock } from "./distributedLock";
 
 export interface PaperRuntime {
   engine: MatchingEngine;
@@ -81,7 +82,7 @@ export async function withTradingMutationLock<T>(task: () => Promise<T>): Promis
   globalRuntime.__tradingStockSysyemMutationTail = previous.then(() => gate, () => gate);
   await previous.catch(() => undefined);
   try {
-    return await task();
+    return await withDistributedEngineLock(task);
   } finally {
     release();
   }

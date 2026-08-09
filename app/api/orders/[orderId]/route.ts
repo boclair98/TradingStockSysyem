@@ -15,7 +15,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ o
     const result = cancelPaperOrder(orderId, participantId);
     if (result.order) await savePaperOrder(user.userId, result.order);
     await addAudit(user.userId, result.cancelled ? "ORDER_CANCELLED" : "ORDER_CANCEL_REJECTED", orderId, { reason: result.reason ?? null });
-    return Response.json({ venue: "NEXTRADE", mode: "paper", ...result }, {
+    return Response.json({ venue: "NEXTRADE", environment: "member_certification", ...result }, {
       status: result.cancelled ? 200 : 404,
       headers: { "Cache-Control": "no-store" },
     });
@@ -55,7 +55,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ord
       await saveExecution(execution);
     }
     await addAudit(user.userId, result.accepted ? "ORDER_REPLACED" : "ORDER_REPLACE_REJECTED", orderId, { quantity, price: payload.price ?? null, reason: result.reason ?? null });
-    return Response.json({ venue: "NEXTRADE", mode: "paper", ...result }, {
+    return Response.json({ venue: "NEXTRADE", environment: "member_certification", ...result }, {
       status: result.accepted ? 200 : 422,
       headers: { "Cache-Control": "no-store" },
     });

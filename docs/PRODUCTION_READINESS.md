@@ -1,46 +1,50 @@
 # Production readiness boundary
 
-TradingStockSysyem is an authenticated, persistent multi-user paper venue. It is suitable for
-matching-rule demonstrations, integration development and controlled load/recovery exercises. It is
-not yet an authorized exchange, broker OMS or real-money execution venue.
+TradingStockSysyem is an institutional ATS certification environment. It implements the same
+logical boundary as an exchange venue: member order entry, validation and sequencing, pre-trade
+risk, deterministic matching, market-data publication, execution reporting and drop copy.
 
-## Implemented in this repository
+It is not an authorized exchange and must not be presented as a live securities market. The
+public deployment is for conformance testing and demonstrations; it has no clearing, settlement or
+legal trade effect.
 
-- Deterministic price/time priority matching, call auction, IOC/FOK, midpoint and stop-limit orders
-- Korean tick sizes, daily price band and NEXTRADE session profiles
-- Participant cash/inventory checks, order limits and self-trade prevention
-- Durable user, account, position, order, execution and audit journals
-- Exact open-order recovery without re-matching recovered orders
-- Serialized order mutations, mandatory idempotency keys and per-user mutation throttling
-- Authenticated ownership checks and isolated participant ledgers
-- Operator-only `OPEN`, `CANCEL_ONLY` and `FULL_STOP` venue control
-- Optimistic venue-control versioning, SSE market events and health/readiness endpoints
-- SHA-256 chained user audit records with online integrity verification
+## Implemented
 
-## Required before any real-money or institutional production use
+- Price/time priority CLOB matching with IOC, FOK, midpoint, stop-limit and call auction support
+- Member/session scoped order-entry gateway with HMAC authentication and strict inbound sequence
+- Duplicate client-order detection, clock-skew validation and distributed message-rate limiting
+- Deterministic market sequence, execution reports, market-data snapshots and drop-copy journal
+- Korean tick sizes, daily price bands, instrument admission and venue-wide halt modes
+- Pre-trade quantity/notional/open-order limits and self-trade prevention
+- Durable order/execution/audit journals, restart recovery and SHA-256 audit-chain verification
+- Process serialization plus PostgreSQL advisory transaction fencing for multi-instance mutations
+- Operator states `OPEN`, `CANCEL_ONLY` and `FULL_STOP`, health/readiness and live operations view
 
-1. Licensed broker or exchange connectivity: official sandbox/production REST, WebSocket or FIX
-   specifications, credentials, account identifiers, certificates and source-IP registration.
-2. Independent market-data entitlement and normalization for KRX/NEXTRADE best quotes, trades,
-   reference prices, corporate actions and instrument status.
-3. Active/standby or active/active sequencer design, consensus/fencing, deterministic replay and a
-   separately tested disaster-recovery region. The current deployment uses one in-process sequencer.
-4. Clearing and settlement integration, reconciliation, fails management and the applicable T+2
-   workflow. The current cash and positions are simulated.
-5. Exchange-grade time synchronization, immutable external audit retention, HSM-backed keys, SIEM,
-   DDoS/WAF controls, penetration testing and formal access recertification.
-6. Market-surveillance rules, regulatory reporting, short-sale controls, investor protection and
-   legal/compliance approval under the applicable Korean rules.
-7. Capacity certification with realistic peak-order bursts, latency percentiles, soak/failover tests
-   and published recovery objectives.
+## Required before regulated production
 
-## External connection package to request later
+1. NEXTRADE/participant-approved protocol specifications, conformance scenarios, CompIDs, PKI/mTLS
+   certificates, IP allowlists and dedicated connectivity.
+2. Licensed reference/market-data feeds for instrument master, corporate actions, trading status,
+   price bands and KRX/NEXTRADE market state.
+3. Clearing and settlement interfaces and operating agreements with the relevant clearing,
+   depository and participant institutions, including reconciliation and fails handling.
+4. Independent active/standby sequencers, consensus/fencing, deterministic replay, tested regional
+   disaster recovery and formally approved RTO/RPO.
+5. PTP-class time synchronization, immutable external audit retention, HSM-backed keys, SIEM,
+   DDoS/WAF controls, penetration testing and access recertification.
+6. Market surveillance, short-sale and price-manipulation controls, regulatory reporting, legal
+   approval and operational staffing/runbooks.
+7. Capacity certification for forecast peak message rates, tail latency, soak, failover and recovery.
 
-- Provider and environment (`sandbox` or `production`)
-- REST base URL and WebSocket/FIX endpoint
-- App key/client id and secret, supplied only through hosted secrets
-- Account identifier and product/account type
-- Venue-selection support (`AUTO`, `KRX`, `NEXTRADE`)
-- Authentication/token, order, cancel/replace, balance, quote and execution-notice specifications
-- Rate limits, maintenance windows, certificate requirements and test-account approval
+## Member onboarding inputs
 
+- Member ID/CompID and enabled sessions
+- Certification and production endpoint allocation
+- Public certificates and certificate chain (private keys remain with their owner)
+- Source IPs and network/circuit details
+- Protocol version, order types, throttles and kill-switch contacts
+- Drop-copy and market-data session requirements
+
+Retail broker credentials such as Toss Securities or Korea Investment app keys are intentionally
+outside the ATS core. A broker member connects its own OMS/gateway to the venue interface; each
+investor does not upload a personal brokerage credential to the exchange.

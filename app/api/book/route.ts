@@ -11,7 +11,7 @@ export async function GET(request: Request) {
   const runtime = await getHydratedPaperRuntime();
   return Response.json({
     venue: "NEXTRADE",
-    mode: "paper",
+    environment: "member_certification",
     instrument,
     market: runtime.engine.getMarketState(),
     venueControl: runtime.venueControl,

@@ -12,7 +12,7 @@ export async function GET(request: Request) {
   const events = runtime.engine.getEvents(afterSequence).filter((event) => event.type === "EXECUTION" || event.type === "MARKET_STATE_CHANGED" || event.type === "AUCTION_EXECUTED");
   return Response.json({
     venue: "NEXTRADE",
-    mode: "paper",
+    environment: "member_certification",
     afterSequence,
     nextSequence: runtime.engine.sequenceNumber,
     events,

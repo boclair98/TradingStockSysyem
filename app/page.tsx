@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useState, type FormEvent } from "react";
-import { MatchingEngine, type EngineEvent, type Execution, type Order, type OrderType, type Side, type TimeInForce } from "../engine/matchingEngine";
+import { MatchingEngine, type Execution, type Order, type OrderType, type Side, type TimeInForce } from "../engine/matchingEngine";
 import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
 import { instrumentFor, NEXTRADE_INSTRUMENTS as INSTRUMENTS } from "../engine/instrumentMaster";
+import InstitutionalArchitecturePanel from "./InstitutionalArchitecturePanel";
 
 const DEFAULT_SYMBOL = INSTRUMENTS[0].symbol;
 
@@ -12,12 +13,11 @@ const formatPrice = (value: number | null) => value == null ? "—" : `${formatN
 const nowStamp = () => new Date().toLocaleTimeString("ko-KR", { hour12: false }) + "." + String(Date.now() % 1000).padStart(3, "0");
 
 type OrderRow = Order & { filled: number; submittedAt: string };
-type BrokerView = { provider: string; mode: string; status: string; venuePreference: string };
 type ReadinessView = {
   ok: boolean;
   persistence: { ok: boolean; provider: string; latencyMs: number };
   engine: { status: string; sequence: number; recoveredOrders: number };
-  safeguards: { mutationSerialization: boolean; durableOrderJournal: boolean; authenticatedOwnership: boolean; selfTradePolicy: string };
+  safeguards: { mutationSerialization: boolean; distributedLeaderLock?: boolean; durableOrderJournal: boolean; authenticatedOwnership: boolean; selfTradePolicy: string };
 };
 type RiskView = {
   risk: { halted: boolean; openOrders: number; limits: { maxOrderQuantity: number; maxOrderNotional: number; maxOpenOrders: number } };
@@ -35,11 +35,10 @@ type SessionView = {
 
 export default function Home() {
   const [selectedSymbol, setSelectedSymbol] = useState(DEFAULT_SYMBOL);
-  const [engine, setEngine] = useState(() => new MatchingEngine("CANCEL_TAKER", INSTRUMENTS));
+  const [engine] = useState(() => new MatchingEngine("CANCEL_TAKER", INSTRUMENTS));
   const [book, setBook] = useState(() => engine.snapshot(DEFAULT_SYMBOL));
   const [orders, setOrders] = useState<OrderRow[]>([]);
   const [trades, setTrades] = useState<Execution[]>([]);
-  const [events, setEvents] = useState<EngineEvent[]>([]);
   const [marketPhase, setMarketPhase] = useState<MarketPhase>("CONTINUOUS");
   const [side, setSide] = useState<Side>("BUY");
   const [orderType, setOrderType] = useState<OrderType>("LIMIT");
@@ -50,7 +49,6 @@ export default function Home() {
   const [participantId, setParticipantId] = useState("로그인 필요");
   const [message, setMessage] = useState("주문 입력을 기다리는 중");
   const [activeTab, setActiveTab] = useState<"orders" | "trades">("orders");
-  const [brokerView, setBrokerView] = useState<BrokerView>({ provider: "paper", mode: "paper", status: "paper_only", venuePreference: "AUTO" });
   const [readiness, setReadiness] = useState<ReadinessView | null>(null);
   const [riskView, setRiskView] = useState<RiskView | null>(null);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
@@ -61,16 +59,14 @@ export default function Home() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [signInRequired, setSignInRequired] = useState(false);
   const [signInPath, setSignInPath] = useState("/signin-with-chatgpt?return_to=%2F");
+  const authenticated = session !== null;
 
   useEffect(() => {
     let active = true;
     fetch("/api/readiness", { cache: "no-store" })
       .then((response) => response.json())
       .then((payload) => {
-        if (active && payload?.broker) {
-          setBrokerView(payload.broker as BrokerView);
-          setReadiness(payload as ReadinessView);
-        }
+        if (active && payload?.service) setReadiness(payload as ReadinessView);
       })
       .catch(() => undefined);
     return () => { active = false; };
@@ -116,7 +112,7 @@ export default function Home() {
     const load = async () => {
       try {
         const requests: Promise<Response>[] = [fetch(`/api/book?symbol=${encodeURIComponent(selectedSymbol)}`, { cache: "no-store" })];
-        if (session) {
+        if (authenticated) {
           requests.push(fetch("/api/orders", { cache: "no-store" }));
           requests.push(fetch("/api/risk", { cache: "no-store" }));
           requests.push(fetch("/api/audit?limit=30", { cache: "no-store" }));
@@ -134,7 +130,6 @@ export default function Home() {
           const payload = await ordersResponse.json();
           setOrders((payload.orders ?? []).map((order: Order) => ({ ...order, filled: order.quantity - order.remaining, submittedAt: new Date(order.acceptedAt).toLocaleTimeString("ko-KR", { hour12: false }) })));
           setTrades((payload.executions ?? []).map((execution: Execution, index: number) => ({ ...execution, makerOrderId: execution.makerOrderId ?? "", takerOrderId: execution.takerOrderId ?? "", sequence: execution.sequence ?? index + 1 })));
-          setEvents([]);
           if (payload.account) setSession((current) => current ? { ...current, account: payload.account } : current);
         }
         if (riskResponse?.ok) setRiskView(await riskResponse.json() as RiskView);
@@ -154,7 +149,7 @@ export default function Home() {
     void load();
     const timer = window.setInterval(load, 1500);
     return () => { active = false; window.clearInterval(timer); };
-  }, [selectedSymbol, Boolean(session), streamRevision]);
+  }, [selectedSymbol, authenticated, streamRevision]);
 
   const selectedInstrument = instrumentFor(selectedSymbol);
   const visibleTrades = trades.filter((trade) => trade.symbol === selectedSymbol);
@@ -249,7 +244,6 @@ export default function Home() {
   function changeMarketPhase(nextPhase: MarketPhase) {
     engine.setMarketPhase(nextPhase);
     setMarketPhase(nextPhase);
-    setEvents(engine.getEvents().slice(-80));
     refresh();
     setMessage(`${phaseLabel(nextPhase)} phase selected · local venue control`);
   }
@@ -257,7 +251,6 @@ export default function Home() {
   function runAuctionCycle() {
     const result = engine.runAuction(selectedSymbol);
     if (result.executions.length) setTrades((current) => [...result.executions, ...current].slice(0, 50));
-    setEvents(engine.getEvents().slice(-80));
     refresh();
     setMessage(result.price == null ? "동시호가에서 체결 가능한 수량이 없습니다" : `단일가 ${formatNumber(result.price)}원 · ${formatNumber(result.quantity)}주 체결`);
   }
@@ -299,6 +292,7 @@ export default function Home() {
           <button className="rail-item" aria-label="Orders" onClick={() => jumpTo("order-journal")}><span className="rail-icon">◫</span><span>Orders</span></button>
           <button className="rail-item" aria-label="Risk" onClick={() => jumpTo("risk-controls")}><span className="rail-icon">⌁</span><span>Risk</span></button>
           <button className="rail-item" aria-label="Monitor" onClick={() => jumpTo("system-monitor")}><span className="rail-icon">◌</span><span>Monitor</span></button>
+          <button className="rail-item" aria-label="Gateway" onClick={() => jumpTo("institutional-hub")}><span className="rail-icon">↯</span><span>Gateway</span></button>
         </nav>
         <div className="rail-bottom"><button className="rail-item" aria-label="설정"><span className="rail-icon">⚙</span><span>설정</span></button><div className="user-avatar">{session ? session.user.participantId.slice(-2) : "--"}</div></div>
       </aside>
@@ -306,27 +300,27 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / MATCHING CORE</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
-          <div className="top-actions"><div className="market-state"><span className="tiny-dot green" /> 다중 사용자 모의시장 운영</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "로그인 필요"}</div></div>
+          <div className="top-actions"><div className="market-state"><span className="tiny-dot green" /> 회원사 적합성 시험시장 운영</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "운영자 로그인 필요"}</div></div>
         </header>
 
         <div className="content" id="matching-console">
-          {signInRequired ? <section className="auth-banner"><div><strong>로그인 후 공유 모의시장에 참가하세요</strong><span>사용자별 모의계좌, 주문, 체결내역이 안전하게 분리됩니다.</span></div><a href={signInPath}>로그인</a></section> : session ? <section className="account-strip"><div><span>참가자</span><strong>{session.user.participantId}</strong></div><div><span>모의 예수금</span><strong>{formatNumber(session.account.cashBalance)}원</strong></div><div><span>주문 가능금액</span><strong>{formatNumber(session.account.availableCash)}원</strong></div><div><span>선택종목 보유</span><strong>{formatNumber(session.account.positions.find((item) => item.symbol === selectedSymbol)?.quantity ?? 0)}주</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
+          {signInRequired ? <section className="auth-banner"><div><strong>운영 콘솔은 인증된 시험 참가자만 사용할 수 있습니다</strong><span>실제 회원사 접속은 전용망·세션키·순번·서명 검증을 거쳐 주문 게이트웨이로 수신됩니다.</span></div><a href={signInPath}>운영자 로그인</a></section> : session ? <section className="account-strip"><div><span>시험 회원사</span><strong>{session.user.participantId}</strong></div><div><span>운영 권한</span><strong>{session.user.role.toUpperCase()}</strong></div><div><span>Order Entry</span><strong>OE-A · ACTIVE</strong></div><div><span>Market Data</span><strong>MD-A · seq {formatNumber(book.sequence)}</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
           <div className="instrument-bar">
-            <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">호가창 · 주문원장 · 체결 이벤트</div></div></div>
+            <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">중앙 호가장 · 시장 시퀀스 · 체결 보고</div></div></div>
             <div className="instrument-selector"><label htmlFor="instrument-select">종목 선택</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>가상 종목 마스터 · {INSTRUMENTS.length}종목</span></div>
-            <div className="quote-block"><span className="quote-label">최근 체결</span><strong>{formatPrice(lastTrade)}</strong><span className="muted">외부 피드 없음</span></div>
-            <div className="instrument-actions"><span className="api-status"><span className="tiny-dot green" /> 공유 모의시장 · 인증 적용</span><button className="ghost-button" onClick={resetEngine}>새로고침</button></div>
+            <div className="quote-block"><span className="quote-label">최근 체결</span><strong>{formatPrice(lastTrade)}</strong><span className="muted">MD-A seq {formatNumber(book.sequence)}</span></div>
+            <div className="instrument-actions"><span className="api-status"><span className="tiny-dot green" /> 회원사 시험망 · 인증 적용</span><button className="ghost-button" onClick={resetEngine}>새로고침</button></div>
           </div>
 
-          <section className="feed-warning"><span className="warning-icon">P</span><div><strong>공유 모의시장 · 실제 자금이 사용되지 않습니다.</strong><span>모든 주문은 로그인한 참가자의 모의계좌로 접수되고 동일한 서버 주문장에서 가격·시간 우선으로 체결됩니다.</span></div></section>
+          <section className="feed-warning"><span className="warning-icon">C</span><div><strong>회원사 적합성 시험환경 · 실제 운영시장과 결제망에는 연결되지 않습니다.</strong><span>시험 주문은 게이트웨이 순번·서명·사전위험검사를 통과한 뒤 결정론적 가격·시간 우선 엔진에서 체결됩니다.</span></div></section>
 
-          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>CORE PROFILE</span><strong>PRICE / TIME PRIORITY</strong></div><div><span>BROKER GATEWAY</span><strong>{brokerView.provider.toUpperCase()} · {brokerView.mode.toUpperCase()}</strong></div><div><span>TARGET VENUE</span><strong>{brokerView.venuePreference} · KRX/NEXTRADE</strong></div><div className="profile-lock"><span className={`tiny-dot ${venueControl?.haltMode === "OPEN" ? "green" : "amber"}`} /> {venueControl?.haltMode === "FULL_STOP" ? "VENUE FULL STOP" : venueControl?.haltMode === "CANCEL_ONLY" ? "CANCEL ONLY" : "ORDER GATE OPEN"}</div></section>
+          <section className="engine-profile" aria-label="엔진 프로파일"><div><span>MATCHING POLICY</span><strong>DETERMINISTIC PRICE / TIME</strong></div><div><span>ORDER GATEWAY</span><strong>MEMBER SESSION · HMAC · SEQUENCE</strong></div><div><span>RECOVERY</span><strong>WAL · SNAPSHOT · DISTRIBUTED LEADER LOCK</strong></div><div className="profile-lock"><span className={`tiny-dot ${venueControl?.haltMode === "OPEN" ? "green" : "amber"}`} /> {venueControl?.haltMode === "FULL_STOP" ? "VENUE FULL STOP" : venueControl?.haltMode === "CANCEL_ONLY" ? "CANCEL ONLY" : "ORDER GATE OPEN"}</div></section>
 
           <section className="operations-strip" id="system-monitor" aria-label="운영 상태">
             <div><span>서비스 상태</span><strong className={readiness?.ok ? "positive" : "sell-color"}>{readiness?.ok ? "정상" : "확인 중"}</strong><small>readiness gate</small></div>
             <div><span>주문 저널</span><strong>{readiness?.persistence.ok ? readiness.persistence.provider.toUpperCase() : "—"}</strong><small>{readiness?.persistence.ok ? `${readiness.persistence.latencyMs}ms 응답` : "영속 저장소 확인"}</small></div>
             <div><span>복구 미체결</span><strong>{formatNumber(readiness?.engine.recoveredOrders ?? 0)}건</strong><small>원본 우선순위 유지</small></div>
-            <div><span>동시 주문 보호</span><strong>{readiness?.safeguards.mutationSerialization ? "직렬 처리" : "—"}</strong><small>잔고·체결 원자 경계</small></div>
+            <div><span>매칭 리더</span><strong>{readiness?.safeguards.distributedLeaderLock ? "분산 직렬화" : readiness?.safeguards.mutationSerialization ? "단일 직렬화" : "—"}</strong><small>결정론적 처리 경계</small></div>
             <div><span>실시간 이벤트</span><strong className={streamConnected ? "positive" : "muted"}>{streamConnected ? "연결됨" : "재연결 중"}</strong><small>SSE · 자동 복구</small></div>
           </section>
 
@@ -343,12 +337,12 @@ export default function Home() {
 
           <div className="dashboard-grid">
             <section className="panel order-panel">
-              <div className="panel-heading"><div><span className="section-kicker">ORDER ENTRY</span><h2>주문 입력</h2></div><span className="latency-badge">CORE ONLY</span></div>
+              <div className="panel-heading"><div><span className="section-kicker">CERTIFICATION ORDER ENTRY</span><h2>회원사 시험 주문</h2></div><span className="latency-badge">OE-A</span></div>
               <div className="segmented"><button className={side === "BUY" ? "selected-buy" : ""} onClick={() => setSide("BUY")}>매수</button><button className={side === "SELL" ? "selected-sell" : ""} onClick={() => setSide("SELL")}>매도</button></div>
               <div className="order-tabs"><button type="button" className={orderType === "LIMIT" ? "active" : ""} onClick={() => setOrderType("LIMIT")}>지정가</button><button type="button" className={orderType === "MARKET" ? "active" : ""} onClick={() => { setOrderType("MARKET"); setTimeInForce("IOC"); }}>시장가</button><button type="button" className={orderType === "MIDPOINT" ? "active" : ""} onClick={() => { setOrderType("MIDPOINT"); setTimeInForce("GTC"); }}>중간가</button><button type="button" className={orderType === "STOP_LIMIT" ? "active" : ""} onClick={() => { setOrderType("STOP_LIMIT"); setTimeInForce("GTC"); }}>스톱지정가</button></div>
               <div className="tif-row" aria-label="주문 유효조건"><span>유효조건</span><button type="button" className={orderType === "MARKET" || timeInForce === "GTC" ? "active" : ""} onClick={() => setTimeInForce("GTC")} disabled={orderType === "MARKET"}>GTC · 잔량유지</button><button type="button" className={orderType !== "MARKET" && timeInForce === "IOC" ? "active" : ""} onClick={() => setTimeInForce("IOC")}>IOC · 즉시취소</button><button type="button" className={orderType !== "MARKET" && timeInForce === "FOK" ? "active" : ""} onClick={() => setTimeInForce("FOK")}>FOK · 전량체결</button></div>
               <form onSubmit={submitOrder}>
-                <label className="field-label">참가자 ID <span>로그인 계정에서 자동 지정</span></label>
+                <label className="field-label">회원사 ID <span>인증 세션에서 자동 지정</span></label>
                 <div className="number-input disabled"><input aria-label="참가자 ID" type="text" value={participantId} readOnly /></div>
                 <label className="field-label">가격 <span>KRW · 호가단위 {formatNumber(selectedInstrument.tickSize)}원</span></label>
                 <div className={`number-input ${orderType === "MARKET" || orderType === "MIDPOINT" ? "disabled" : ""}`}><input aria-label="주문 가격" type="number" step={selectedInstrument.tickSize} min={selectedInstrument.minPrice} value={price} disabled={orderType === "MARKET" || orderType === "MIDPOINT"} onChange={(event) => setPrice(event.target.value)} /><span>원</span></div>
@@ -365,7 +359,7 @@ export default function Home() {
             </section>
 
             <section className="panel book-panel">
-              <div className="panel-heading"><div><span className="section-kicker">ORDER BOOK</span><h2>호가창 <span className="live-label"><span className="tiny-dot green" /> SHARED PAPER</span></h2></div><div className="book-meta"><span>단위: 주</span></div></div>
+              <div className="panel-heading"><div><span className="section-kicker">CENTRAL LIMIT ORDER BOOK</span><h2>중앙 호가장 <span className="live-label"><span className="tiny-dot green" /> MD-A LIVE</span></h2></div><div className="book-meta"><span>단위: 주</span></div></div>
               <div className="book-summary"><div><span>매도 잔량</span><strong className="sell-color">{formatNumber(totalAsk)}</strong></div><div className="spread"><span>스프레드</span><strong>{spread == null ? "—" : `${formatNumber(spread)}원`}</strong></div><div><span>매수 잔량</span><strong className="buy-color">{formatNumber(totalBid)}</strong></div></div>
               <div className="book-head"><span>가격</span><span>잔량</span><span>누적</span></div>
               <div className="book-rows asks">{sortedAsks.length ? sortedAsks.slice(0, 8).map((level) => <div className="book-row" key={`ask-${level.price}`}><span className="depth-bar ask-bar" style={{ width: `${Math.min(100, (level.quantity / maxDepth) * 100)}%` }} /><span className="price-cell sell-color">{formatNumber(level.price)}</span><span>{formatNumber(level.quantity)}</span><span className="muted">{level.orderCount}건</span></div>) : <div className="empty-book">매도 호가 없음</div>}</div>
@@ -377,7 +371,7 @@ export default function Home() {
 
             <section className="panel activity-panel">
               <div className="panel-heading"><div><span className="section-kicker">EXECUTION LOG</span><h2>체결 이벤트</h2></div><span className="time-badge">LOCAL</span></div>
-              <div className="feed-state-card"><span className="feed-state-icon">↯</span><div><strong>사용자별 체결내역</strong><span>현재 로그인 계정의 모의체결만 표시합니다.</span></div></div>
+              <div className="feed-state-card"><span className="feed-state-icon">↯</span><div><strong>Execution Report · Drop Copy</strong><span>시험 회원사에 전달된 주문확인·거부·체결 이벤트입니다.</span></div></div>
               <div className="activity-tabs"><button className={activeTab === "orders" ? "active" : ""} onClick={() => setActiveTab("orders")}>주문 이벤트</button><button className={activeTab === "trades" ? "active" : ""} onClick={() => setActiveTab("trades")}>최근 체결</button></div>
               {activeTab === "trades" ? <div className="trade-list">{visibleTrades.length ? visibleTrades.slice(0, 10).map((trade) => <div className="trade-row" key={trade.id}><span className="buy-color">체결</span><strong>{formatNumber(trade.price)}</strong><span>{formatNumber(trade.quantity)}주</span><time>seq {trade.sequence}</time></div>) : <div className="empty-activity">체결 이벤트가 없습니다.</div>}</div> : <div className="event-list">{auditEntries.length ? auditEntries.slice(0, 8).map((entry) => <div className="event-row" key={entry.id}><span className={`event-icon ${entry.action.includes("REJECT") ? "amber" : entry.action.includes("CANCEL") ? "violet" : "green"}`}>{entry.action.includes("REJECT") ? "!" : entry.action.includes("CANCEL") ? "×" : "✓"}</span><div><strong>{entry.action.replaceAll("_", " ")}</strong><span>{entry.entityId ?? "사용자 주문 일괄 작업"}</span></div><time>{new Date(entry.createdAt).toLocaleTimeString("ko-KR", { hour12: false })}</time></div>) : <div className="empty-activity">개인 감사기록이 없습니다.</div>}</div>}
               <div className="activity-footer"><span>세션 체결수량</span><strong>{formatNumber(visibleTrades.reduce((sum, trade) => sum + trade.quantity, 0))}주</strong></div>
@@ -387,7 +381,8 @@ export default function Home() {
           <div id="order-journal" className="scroll-anchor" aria-hidden="true" />
 
           <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>발동가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : order.type === "MARKET" ? "시장가" : order.type === "MIDPOINT" ? "중간가" : "스톱지정가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatPrice(order.stopPrice ?? null)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "PENDING_TRIGGER" ? "발동대기" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={14} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
-          <footer className="page-footer"><span>TradingStockSysyem · multi-user paper venue</span><span><span className="tiny-dot green" /> AUTHENTICATED PARTICIPANTS · ISOLATED LEDGERS</span></footer>
+          {session ? <InstitutionalArchitecturePanel /> : null}
+          <footer className="page-footer"><span>TradingStockSysyem · institutional ATS certification venue</span><span><span className="tiny-dot green" /> MEMBER GATEWAY · MATCHING CORE · MARKET DATA · DROP COPY</span></footer>
         </div>
       </section>
     </main>

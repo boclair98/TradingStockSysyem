@@ -1,20 +1,19 @@
-import { getBrokerReadiness, redactBrokerConfig } from "../../../engine/brokerGateway";
 import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
-import { getPersistenceHealth } from "../../../db/trading";
+import { getGatewayOperations, getPersistenceHealth } from "../../../db/trading";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const broker = getBrokerReadiness();
-  const [persistence, runtime] = await Promise.all([getPersistenceHealth(), getHydratedPaperRuntime()]);
-  const ready = persistence.ok && broker.status !== "blocked";
+  const [persistence, runtime, gateway] = await Promise.all([getPersistenceHealth(), getHydratedPaperRuntime(), getGatewayOperations()]);
+  const ready = persistence.ok;
   return Response.json({
     ok: ready,
     service: "TradingStockSysyem",
     targetVenue: "NEXTRADE",
-    integrationModel: "securities_broker_api",
-    paperTrading: broker.mode === "paper",
-    broker,
+    integrationModel: "institutional_member_gateway",
+    environment: "member_certification",
+    liveMarket: false,
+    gateway,
     persistence,
     engine: {
       status: runtime.venueControl?.haltMode === "OPEN" ? "ready" : "halted",
@@ -25,15 +24,18 @@ export async function GET() {
     },
     safeguards: {
       mutationSerialization: true,
+      distributedLeaderLock: Boolean(process.env.DATABASE_URL),
       durableOrderJournal: true,
       authenticatedOwnership: true,
       selfTradePolicy: "CANCEL_TAKER",
       idempotencyRequired: true,
-      orderRateLimit: "40 mutations / 10 seconds / user",
+      orderRateLimit: "1,000 messages / second / member session",
       realtimeStream: "SSE",
       chainedAudit: true,
+      memberAuthentication: "HMAC-SHA256 certification gateway",
+      contiguousSessionSequence: true,
+      dropCopy: true,
     },
-    configuredConnection: redactBrokerConfig(),
   }, {
     status: ready ? 200 : 503,
     headers: { "Cache-Control": "no-store" },

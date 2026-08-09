@@ -6,3 +6,8 @@ dist
 work
 outputs
 *.log
+.env*
+*.pem
+KIS_API_비밀설정.txt
+ATS_기관연동_ENV_설정_메모장.txt
+TradingStockSysyem-Private

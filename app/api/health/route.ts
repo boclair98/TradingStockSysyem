@@ -5,7 +5,7 @@ export async function GET() {
     ok: true,
     service: "TradingStockSysyem",
     venue: "NEXTRADE",
-    mode: "paper",
+    environment: "member_certification",
     timestamp: new Date().toISOString(),
   }, {
     headers: { "Cache-Control": "no-store" },

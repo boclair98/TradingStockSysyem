@@ -14,7 +14,7 @@ export async function GET() {
   const reservedCash = account.cashBalance - account.availableCash;
   return Response.json({
     venue: "NEXTRADE",
-    mode: "paper",
+    environment: "member_certification",
     risk,
     exposure: {
       cashBalance: account.cashBalance,
@@ -24,6 +24,6 @@ export async function GET() {
       openOrderUtilizationPercent: Math.round((risk.openOrders / risk.limits.maxOpenOrders) * 10_000) / 100,
     },
     controls: ["authenticated ownership", "cash and inventory", "participant limits", "self-trade prevention", "serialized mutations"],
-    policy: "paper_pre_trade_limits_v2",
+    policy: "member_pre_trade_risk_v1",
   }, { headers: { "Cache-Control": "no-store" } });
 }
