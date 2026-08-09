@@ -42,6 +42,7 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/venue-core-java/out/
 .env.local
 .env.*.local
 KIS_API_비밀설정.txt

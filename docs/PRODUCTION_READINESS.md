@@ -11,6 +11,7 @@ legal trade effect.
 ## Implemented
 
 - Price/time priority CLOB matching with IOC, FOK, midpoint, stop-limit and call auction support
+- Independent Java 21 venue-core baseline with fixed integer prices/quantities, monotonic command sequencing, CRC32C/fsync WAL and deterministic replay digest
 - Member/session scoped order-entry gateway with HMAC authentication and strict inbound sequence
 - Duplicate client-order detection, clock-skew validation and distributed message-rate limiting
 - Deterministic market sequence, execution reports, market-data snapshots and drop-copy journal

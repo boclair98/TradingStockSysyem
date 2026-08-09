@@ -1,99 +1,90 @@
 # TradingStockSysyem
 
-다중 사용자가 자기 명의 증권계좌를 연결해 국내주식 실시간 시세·잔고를 확인하고, 사전위험검사를 거쳐 실제 주문을 전송·취소·대사할 수 있는 거래 서비스입니다. 별도의 ATS 매칭엔진 랩과 기관 회원사 적합성 게이트웨이도 포함합니다.
+국내 ATS(다자간매매체결회사)를 목표로 하는 매매체결 코어, 회원사 적합성 게이트웨이, 운영 통제·감사 UI 프로젝트입니다.
 
-공개 서비스: <https://tradingstocksysyem.coders.kr/>
+공개 기술실사 환경: <https://tradingstocksysyem.coders.kr/>
 
-> **실거래 주의:** `production` 연결과 `LIVE_TRADING_ENABLED=true`는 실제 현금 주문을 증권사로 전송합니다. 개발·CI·검증 과정에서는 절대로 실전 주문 API를 호출하지 마세요.
+> **현재 판정: Engineering Evaluation Build.** 금융기관 PoC·코드 실사에는 사용할 수 있지만, 인가·회원사 적합성·시장감시·청산결제·이중센터 인증 전에는 실제 거래소로 운영하거나 “운영 인증 완제품”으로 판매할 수 없습니다.
 
-## 현재 지원 범위
+## 왜 다시 구성했는가
 
-- 사용자별 로그인, 계좌·주문·위험정책 데이터 격리
-- 한국투자증권 Open Trading API 실전/모의 계좌 연결
-- App Key, App Secret, 계좌번호, 토큰 AES-256-GCM 암호화 저장
-- 실시간 국내주식 현재가 및 실계좌 잔고·보유종목 조회
-- KRX, NXT, SOR 주문 라우팅
-- 지정가·시장가 및 DAY·IOC·FOK 현금주문
-- 주문 취소와 당일 주문·체결 원장 대사
-- 주문당 수량·금액, 일일 주문금액, 미체결 건수 제한
-- 서버 마스터 스위치, 사용자 실거래 동의, 킬 스위치
-- 60초 단일사용 주문 미리보기와 정확한 확인문구
-- 네트워크 타임아웃 주문을 `UNKNOWN`으로 보존해 맹목적 재전송 방지
-- PostgreSQL advisory lock 기반 사용자별 주문 직렬화
-- 가격·시간 우선 CLOB, 단일가, IOC/FOK, 자기체결 방지 ATS 랩
-- 회원사 HMAC, 세션 순번, Drop Copy, 시장정보, 감사 해시체인
+개인 사용자의 증권사 App Key를 받아 주문을 중계하는 서비스는 거래소가 아닙니다. 실제 ATS에서는 증권사가 회원으로 접속하고 ATS가 다수 회원의 주문을 독립적으로 체결한 뒤 시장정보·체결보고·감시·청산결제 경계로 전달합니다.
 
-## 실거래 처리 흐름
+따라서 프로젝트를 다음처럼 분리했습니다.
 
-```text
-로그인 사용자
-  -> 사용자별 암호화 Broker Vault
-  -> KIS 토큰/실시간 시세/실계좌 잔고
-  -> 사전위험검사와 매도가능수량 검사
-  -> 60초 주문 미리보기 + 사용자 확인문구
-  -> 내구성 원장에 PENDING 선기록
-  -> KIS 현금주문(KRX/NXT/SOR)
-  -> SUBMITTED / UNKNOWN 상태 보존
-  -> 당일 주문·체결 대사
-```
+- `venue-core-java/`: API·웹·DB에서 분리된 Java 21 결정론적 매칭 코어
+- `engine/memberGateway.ts`: 회원사 세션·순번·인증·중복·속도 적합성 게이트
+- `engine/matchingEngine.ts`: 브라우저와 규칙 검증용 TypeScript 참조 엔진
+- `db/`: 시험 원장·Drop Copy·감사 해시체인·운영 상태
+- `app/`: 기술실사·운영 UI
+- `engine/liveTradingService.ts`: KIS 증권사 라우팅 실험 어댑터이며 ATS 코어와 분리
 
-## 실거래 API
+## 독립 Venue Core
 
-```text
-GET/POST/DELETE /api/brokers                사용자 증권계좌 연결·해제
-GET             /api/live/readiness         전체 실거래 준비상태
-GET             /api/live/account           실계좌 잔고·보유종목
-GET             /api/live/quote             국내주식 현재가
-GET/PATCH       /api/live/risk              사용자 한도·동의·킬 스위치
-POST            /api/live/orders/preview    시세·잔고·위험검사와 60초 미리보기
-GET/POST        /api/live/orders            주문 원장 / 실제 주문 전송
-GET/DELETE      /api/live/orders/:orderId   주문 조회 / 실제 취소
-POST            /api/live/reconcile         당일 주문·체결 대사
-```
+Java 21 코어는 다음을 구현합니다.
 
-모든 실거래 API는 로그인 사용자 소유권을 검사합니다. App Secret과 전체 계좌번호는 응답·UI·로그에 반환하지 않습니다.
-
-## 필요한 설정
-
-1. [한국투자증권 KIS Developers](https://apiportal.koreainvestment.com/)에서 사용자 본인의 실전 또는 모의투자 App Key/App Secret을 발급합니다.
-2. 서버 비밀 저장소에 `CREDENTIAL_ENCRYPTION_KEY`를 등록합니다. 이미 암호화된 계좌가 있으면 이 키를 임의로 교체하면 안 됩니다.
-3. 개발 중에는 `LIVE_TRADING_ENABLED=false`를 유지합니다.
-4. 운영 승인이 끝난 배포에서만 `LIVE_TRADING_ENABLED=true`로 전환합니다.
-5. 사용자는 웹 화면에서 자기 키·계좌번호 앞 8자리·상품코드(일반적으로 `01`)·KIS 고객 ID를 직접 등록합니다.
-
-토스증권은 현재 이 서비스가 요구하는 일반 고객용 주문 Open API 연동 대상이 아닙니다. 토스 사용자는 토스 계좌를 직접 연결할 수 없으며, 정식 주문 API와 제휴·인가 범위가 확보된 뒤 별도 어댑터를 추가해야 합니다.
-
-## 환경변수
-
-```dotenv
-CERTIFICATION_GATEWAY_KEYS={}
-CREDENTIAL_ENCRYPTION_KEY=<64자 이상 무작위 비밀값>
-LIVE_TRADING_ENABLED=false
-```
-
-로컬 사용자의 실제 App Key/App Secret은 `.env.local`이나 GitHub에 저장하는 대신 화면의 암호화 계좌 연결을 사용합니다. `.env*`, 토큰, 개인 메모 파일은 Git에서 제외됩니다.
-
-## 개발 및 검증
+- 정수 고정 가격·수량
+- 종목별 가격·시간 우선 CLOB
+- 지정가·보호가격 시장가, DAY·IOC·FOK
+- 회원별 중복 ClientOrderId 차단
+- CANCEL_AGGRESSOR 자기체결 방지
+- 신규·취소·정정, 정정 시 시간 우선순위 상실
+- 호가단위·수량단위·일일 가격범위
+- 회원별 주문수량·주문금액·미체결·킬 스위치
+- 전역 명령/이벤트 단조 증가 sequence
+- CRC32C 프레임과 `fsync` 명령 WAL
+- 저널 손상·부분 프레임·sequence gap 거부
+- 재기동 명령 재생과 SHA-256 상태 다이제스트 비교
 
 ```powershell
-npm.cmd install
+powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/test.ps1
+powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/benchmark.ps1
+```
+
+2026-08-09 개발 PC 기준으로 10만 건 비체결 DAY 명령을 약 144,902 commands/s로 처리했습니다. 이는 네트워크·동기복제·시장정보 fan-out·장애전환을 제외한 로컬 기준선이며 거래소 SLA가 아닙니다.
+
+## 회원사 적합성 경계
+
+- 회원/세션별 HMAC 인증 시험
+- 연속 inbound/outbound sequence
+- 중복 ClientOrderId 방지
+- 회원 세션별 속도제한
+- Execution Report와 Drop Copy
+- 시장정보 스냅샷과 시장 sequence
+- 취소전용·전면정지 운영 통제
+- PostgreSQL advisory fencing 시험
+- 주문·체결·감사 원장과 해시체인
+
+## 증권사 실계좌 어댑터
+
+한국투자증권 Open Trading API 기반 실전/모의 계좌, 잔고, 시세, KRX·NXT·SOR 주문, 취소, 체결대사 기능이 별도 실험 어댑터로 존재합니다.
+
+이 어댑터는 ATS 회원사 접속 인터페이스를 대체하지 않으며 거래소 data-plane과 함께 배포해서는 안 됩니다. 실전 주문은 서버 스위치, 사용자 위험동의, 킬 스위치 해제, 60초 주문 미리보기와 확인문구가 모두 통과해야 전송됩니다.
+
+## API가 아니라 먼저 필요한 자료
+
+1. 대상 기관 승인 회원 주문·정정·취소·세션·Drop Copy 프로토콜
+2. 종목·권리변동·시장상태·호가·체결 데이터 계약과 포맷
+3. 시장감시·규제보고·원본 보존 요구
+4. KRX/KSD 청산결제·대사·결제불이행 인터페이스
+5. 회원 수, 종목 수, 평균/피크 msg/s, p99.99 지연 목표
+6. RTO/RPO, 이중센터, 전용망, PKI/HSM, PTP 요구
+7. 승인 업무규정과 회원사 적합성 테스트 케이스
+
+## 문서
+
+- [거래소 납품 준비 갭 매트릭스](docs/EXCHANGE_PRODUCT_GAP_MATRIX.md)
+- [목표 ATS 제품 아키텍처](docs/EXCHANGE_ARCHITECTURE.md)
+- [장애전환·복구 Runbook](docs/FAILOVER_RUNBOOK.md)
+- [성능 기준선](docs/PERFORMANCE_BASELINE.md)
+- [운영 전환 경계](docs/PRODUCTION_READINESS.md)
+
+## 웹 검증
+
+```powershell
 npm.cmd run test:unit
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
 
-테스트는 모킹한 증권사 응답만 사용하고 실전 주문 엔드포인트에 접근하지 않아야 합니다.
-
-## ATS 매칭엔진 랩
-
-```text
-Member Session
-  -> HMAC / Sequence / Duplicate / Rate Check
-  -> Pre-trade Risk
-  -> Global Sequencer
-  -> Deterministic Price-Time Matching Core
-  -> Execution Report / Drop Copy / Market Data
-  -> Durable Journal / Recovery
-```
-
-랩은 거래소 수준 책임 경계를 검증하기 위한 코드이며 실계좌 주문과 분리되어 있습니다. 법적 의미의 거래소나 다자간매매체결회사 운영에는 금융당국 인가, 회원사 전용망과 PKI/mTLS, 시장감시, KRX·예탁결제원 청산결제 규격, 이중 데이터센터, 공인 시각동기화, 대량 부하·장애복구·침투·회원사 적합성 시험이 별도로 필요합니다.
+테스트나 CI에서는 실제 증권사 주문 엔드포인트를 호출하지 않습니다.

@@ -6,6 +6,7 @@ import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
 import { instrumentFor, NEXTRADE_INSTRUMENTS as INSTRUMENTS } from "../engine/instrumentMaster";
 import InstitutionalArchitecturePanel from "./InstitutionalArchitecturePanel";
 import LiveTradingPanel from "./LiveTradingPanel";
+import ExchangeProductPanel from "./ExchangeProductPanel";
 
 const DEFAULT_SYMBOL = INSTRUMENTS[0].symbol;
 
@@ -289,7 +290,8 @@ export default function Home() {
       <aside className="side-rail">
         <div className="brand-mark">S<span>TS</span></div>
         <nav className="rail-nav" aria-label="주요 메뉴">
-          <button className="rail-item active" aria-label="Live Trading" onClick={() => jumpTo("live-trading")}><span className="rail-icon">↗</span><span>Live</span></button>
+          <button className="rail-item active" aria-label="Exchange Core" onClick={() => jumpTo("exchange-core")}><span className="rail-icon">◆</span><span>Core</span></button>
+          <button className="rail-item" aria-label="Live Trading" onClick={() => jumpTo("live-trading")}><span className="rail-icon">↗</span><span>Broker</span></button>
           <button className="rail-item" aria-label="Matching Lab" onClick={() => jumpTo("matching-console")}><span className="rail-icon">⌁</span><span>Lab</span></button>
           <button className="rail-item" aria-label="Orders" onClick={() => jumpTo("order-journal")}><span className="rail-icon">◫</span><span>Orders</span></button>
           <button className="rail-item" aria-label="Risk" onClick={() => jumpTo("risk-controls")}><span className="rail-icon">⌁</span><span>Risk</span></button>
@@ -301,13 +303,14 @@ export default function Home() {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / LIVE ROUTING</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
-          <div className="top-actions"><div className="market-state"><span className="tiny-dot green" /> 실계좌 라우팅 · KRX / NXT / SOR</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "사용자 로그인 필요"}</div></div>
+          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / ATS VENUE CORE</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
+          <div className="top-actions"><div className="market-state"><span className="tiny-dot amber" /> ENGINEERING EVALUATION · NOT CERTIFIED</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "운영자 로그인 필요"}</div></div>
         </header>
 
         <div className="content" id="matching-console">
           {signInRequired ? <section className="auth-banner"><div><strong>실계좌 주문은 로그인한 사용자만 사용할 수 있습니다</strong><span>사용자별 증권사 키와 계좌는 암호화·분리 저장되며 다른 사용자에게 공개되지 않습니다.</span></div><a href={signInPath}>사용자 로그인</a></section> : session ? <section className="account-strip"><div><span>사용자</span><strong>{session.user.participantId}</strong></div><div><span>권한</span><strong>{session.user.role.toUpperCase()}</strong></div><div><span>Live Broker</span><strong>USER VAULT</strong></div><div><span>Engine Lab</span><strong>seq {formatNumber(book.sequence)}</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
 
+          <ExchangeProductPanel />
           <LiveTradingPanel authenticated={authenticated} />
 
           <div className="instrument-bar">
