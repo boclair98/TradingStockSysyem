@@ -221,3 +221,77 @@ export const dropCopyEvents = sqliteTable("drop_copy_events", {
   uniqueIndex("idx_drop_copy_member_sequence_event").on(table.memberId, table.marketSequence, table.eventType),
   index("idx_drop_copy_member_time").on(table.memberId, table.createdAt),
 ]);
+
+export const brokerTokens = sqliteTable("broker_tokens", {
+  connectionId: text("connection_id").primaryKey(),
+  tokenCiphertext: text("token_ciphertext").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const liveRiskPolicies = sqliteTable("live_risk_policies", {
+  userId: text("user_id").primaryKey().references(() => users.id),
+  liveEnabled: integer("live_enabled").notNull().default(0),
+  automationEnabled: integer("automation_enabled").notNull().default(0),
+  killSwitch: integer("kill_switch").notNull().default(1),
+  maxOrderQuantity: integer("max_order_quantity").notNull().default(10),
+  maxOrderNotional: integer("max_order_notional").notNull().default(1_000_000),
+  maxDailyNotional: integer("max_daily_notional").notNull().default(5_000_000),
+  maxOpenOrders: integer("max_open_orders").notNull().default(5),
+  allowedSymbolsJson: text("allowed_symbols_json").notNull().default("[]"),
+  acknowledgedAt: text("acknowledged_at"),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const liveOrderPreviews = sqliteTable("live_order_previews", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  connectionId: text("connection_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  requestJson: text("request_json").notNull(),
+  quotePrice: integer("quote_price").notNull(),
+  estimatedNotional: integer("estimated_notional").notNull(),
+  expiresAt: text("expires_at").notNull(),
+  consumedAt: text("consumed_at"),
+  createdAt: text("created_at").notNull(),
+}, (table) => [index("idx_live_previews_user_expiry").on(table.userId, table.expiresAt)]);
+
+export const liveOrders = sqliteTable("live_orders", {
+  id: text("id").primaryKey(),
+  userId: text("user_id").notNull().references(() => users.id),
+  connectionId: text("connection_id").notNull(),
+  clientOrderId: text("client_order_id").notNull(),
+  brokerOrderId: text("broker_order_id"),
+  brokerOrgNo: text("broker_org_no"),
+  symbol: text("symbol").notNull(),
+  side: text("side").notNull(),
+  orderType: text("order_type").notNull(),
+  timeInForce: text("time_in_force").notNull(),
+  venue: text("venue").notNull(),
+  price: integer("price"),
+  quantity: integer("quantity").notNull(),
+  executedQuantity: integer("executed_quantity").notNull().default(0),
+  averagePrice: integer("average_price"),
+  status: text("status").notNull(),
+  brokerCode: text("broker_code"),
+  brokerMessage: text("broker_message"),
+  submittedAt: text("submitted_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_live_orders_user_client_order").on(table.userId, table.clientOrderId),
+  index("idx_live_orders_user_updated").on(table.userId, table.updatedAt),
+  index("idx_live_orders_connection_status").on(table.connectionId, table.status),
+]);
+
+export const liveExecutions = sqliteTable("live_executions", {
+  id: text("id").primaryKey(),
+  liveOrderId: text("live_order_id").notNull(),
+  executionRef: text("execution_ref").notNull(),
+  price: integer("price").notNull(),
+  quantity: integer("quantity").notNull(),
+  venue: text("venue").notNull(),
+  executedAt: text("executed_at").notNull(),
+}, (table) => [
+  uniqueIndex("idx_live_executions_order_ref").on(table.liveOrderId, table.executionRef),
+  index("idx_live_executions_time").on(table.executedAt),
+]);

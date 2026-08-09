@@ -5,7 +5,7 @@ import type { MarketPhase } from "../engine/koreanMarketRules";
 
 type Statement = { sql: string; params?: unknown[] };
 type QueryResult<T> = { rows: T[]; changes: number };
-type DatabaseAdapter = {
+export type DatabaseAdapter = {
   kind: "postgres" | "d1";
   query<T>(sql: string, params?: unknown[]): Promise<QueryResult<T>>;
   batch(statements: Statement[]): Promise<void>;
@@ -39,6 +39,11 @@ const commonSchema = [
   `CREATE TABLE IF NOT EXISTS member_gateway_sessions (session_id TEXT PRIMARY KEY, member_id TEXT NOT NULL, protocol TEXT NOT NULL DEFAULT 'NATIVE_JSON_1', status TEXT NOT NULL DEFAULT 'ACTIVE', expected_inbound_sequence INTEGER NOT NULL DEFAULT 1, outbound_sequence INTEGER NOT NULL DEFAULT 1, remote_address TEXT, connected_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS gateway_messages (id TEXT PRIMARY KEY, member_id TEXT NOT NULL, session_id TEXT NOT NULL, direction TEXT NOT NULL, message_type TEXT NOT NULL, session_sequence INTEGER NOT NULL, market_sequence INTEGER, client_order_id TEXT, venue_order_id TEXT, status TEXT NOT NULL, reject_code TEXT, payload_json TEXT NOT NULL, received_at TEXT NOT NULL, processed_at TEXT, latency_micros INTEGER)`,
   `CREATE TABLE IF NOT EXISTS drop_copy_events (id TEXT PRIMARY KEY, member_id TEXT NOT NULL, market_sequence INTEGER NOT NULL, event_type TEXT NOT NULL, order_id TEXT, execution_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS broker_tokens (connection_id TEXT PRIMARY KEY, token_ciphertext TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_risk_policies (user_id TEXT PRIMARY KEY REFERENCES users(id), live_enabled INTEGER NOT NULL DEFAULT 0, automation_enabled INTEGER NOT NULL DEFAULT 0, kill_switch INTEGER NOT NULL DEFAULT 1, max_order_quantity INTEGER NOT NULL DEFAULT 10, max_order_notional INTEGER NOT NULL DEFAULT 1000000, max_daily_notional INTEGER NOT NULL DEFAULT 5000000, max_open_orders INTEGER NOT NULL DEFAULT 5, allowed_symbols_json TEXT NOT NULL DEFAULT '[]', acknowledged_at TEXT, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_order_previews (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT NOT NULL, request_hash TEXT NOT NULL, request_json TEXT NOT NULL, quote_price INTEGER NOT NULL, estimated_notional INTEGER NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT NOT NULL, client_order_id TEXT NOT NULL, broker_order_id TEXT, broker_org_no TEXT, symbol TEXT NOT NULL, side TEXT NOT NULL, order_type TEXT NOT NULL, time_in_force TEXT NOT NULL, venue TEXT NOT NULL, price INTEGER, quantity INTEGER NOT NULL, executed_quantity INTEGER NOT NULL DEFAULT 0, average_price INTEGER, status TEXT NOT NULL, broker_code TEXT, broker_message TEXT, submitted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_executions (id TEXT PRIMARY KEY, live_order_id TEXT NOT NULL, execution_ref TEXT NOT NULL, price INTEGER NOT NULL, quantity INTEGER NOT NULL, venue TEXT NOT NULL, executed_at TEXT NOT NULL)`,
 ];
 
 const indexes = [
@@ -66,6 +71,12 @@ const indexes = [
   `CREATE INDEX IF NOT EXISTS idx_gateway_message_received_at ON gateway_messages(received_at)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_drop_copy_member_sequence_event ON drop_copy_events(member_id, market_sequence, event_type)`,
   `CREATE INDEX IF NOT EXISTS idx_drop_copy_member_time ON drop_copy_events(member_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_live_previews_user_expiry ON live_order_previews(user_id, expires_at)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_live_orders_user_client_order ON live_orders(user_id, client_order_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_live_orders_user_updated ON live_orders(user_id, updated_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_live_orders_connection_status ON live_orders(connection_id, status)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_live_executions_order_ref ON live_executions(live_order_id, execution_ref)`,
+  `CREATE INDEX IF NOT EXISTS idx_live_executions_time ON live_executions(executed_at)`,
 ];
 
 function postgresSql(sql: string) {
@@ -119,6 +130,11 @@ async function createD1Adapter(): Promise<DatabaseAdapter> {
 async function getAdapter() {
   if (!adapterPromise) adapterPromise = process.env.DATABASE_URL ? createPostgresAdapter() : createD1Adapter();
   return adapterPromise;
+}
+
+export async function getTradingDb() {
+  await ensureTradingSchema();
+  return getAdapter();
 }
 
 export type PaperAccountView = {

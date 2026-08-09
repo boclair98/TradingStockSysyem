@@ -5,6 +5,7 @@ import { MatchingEngine, type Execution, type Order, type OrderType, type Side, 
 import { phaseLabel, type MarketPhase } from "../engine/koreanMarketRules";
 import { instrumentFor, NEXTRADE_INSTRUMENTS as INSTRUMENTS } from "../engine/instrumentMaster";
 import InstitutionalArchitecturePanel from "./InstitutionalArchitecturePanel";
+import LiveTradingPanel from "./LiveTradingPanel";
 
 const DEFAULT_SYMBOL = INSTRUMENTS[0].symbol;
 
@@ -288,7 +289,8 @@ export default function Home() {
       <aside className="side-rail">
         <div className="brand-mark">S<span>TS</span></div>
         <nav className="rail-nav" aria-label="주요 메뉴">
-          <button className="rail-item active" aria-label="Matching" onClick={() => jumpTo("matching-console")}><span className="rail-icon">⌁</span><span>Match</span></button>
+          <button className="rail-item active" aria-label="Live Trading" onClick={() => jumpTo("live-trading")}><span className="rail-icon">↗</span><span>Live</span></button>
+          <button className="rail-item" aria-label="Matching Lab" onClick={() => jumpTo("matching-console")}><span className="rail-icon">⌁</span><span>Lab</span></button>
           <button className="rail-item" aria-label="Orders" onClick={() => jumpTo("order-journal")}><span className="rail-icon">◫</span><span>Orders</span></button>
           <button className="rail-item" aria-label="Risk" onClick={() => jumpTo("risk-controls")}><span className="rail-icon">⌁</span><span>Risk</span></button>
           <button className="rail-item" aria-label="Monitor" onClick={() => jumpTo("system-monitor")}><span className="rail-icon">◌</span><span>Monitor</span></button>
@@ -299,20 +301,23 @@ export default function Home() {
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / MATCHING CORE</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
-          <div className="top-actions"><div className="market-state"><span className="tiny-dot green" /> 회원사 적합성 시험시장 운영</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "운영자 로그인 필요"}</div></div>
+          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / LIVE ROUTING</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
+          <div className="top-actions"><div className="market-state"><span className="tiny-dot green" /> 실계좌 라우팅 · KRX / NXT / SOR</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "사용자 로그인 필요"}</div></div>
         </header>
 
         <div className="content" id="matching-console">
-          {signInRequired ? <section className="auth-banner"><div><strong>운영 콘솔은 인증된 시험 참가자만 사용할 수 있습니다</strong><span>실제 회원사 접속은 전용망·세션키·순번·서명 검증을 거쳐 주문 게이트웨이로 수신됩니다.</span></div><a href={signInPath}>운영자 로그인</a></section> : session ? <section className="account-strip"><div><span>시험 회원사</span><strong>{session.user.participantId}</strong></div><div><span>운영 권한</span><strong>{session.user.role.toUpperCase()}</strong></div><div><span>Order Entry</span><strong>OE-A · ACTIVE</strong></div><div><span>Market Data</span><strong>MD-A · seq {formatNumber(book.sequence)}</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
+          {signInRequired ? <section className="auth-banner"><div><strong>실계좌 주문은 로그인한 사용자만 사용할 수 있습니다</strong><span>사용자별 증권사 키와 계좌는 암호화·분리 저장되며 다른 사용자에게 공개되지 않습니다.</span></div><a href={signInPath}>사용자 로그인</a></section> : session ? <section className="account-strip"><div><span>사용자</span><strong>{session.user.participantId}</strong></div><div><span>권한</span><strong>{session.user.role.toUpperCase()}</strong></div><div><span>Live Broker</span><strong>USER VAULT</strong></div><div><span>Engine Lab</span><strong>seq {formatNumber(book.sequence)}</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
+
+          <LiveTradingPanel authenticated={authenticated} />
+
           <div className="instrument-bar">
             <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">중앙 호가장 · 시장 시퀀스 · 체결 보고</div></div></div>
-            <div className="instrument-selector"><label htmlFor="instrument-select">종목 선택</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>가상 종목 마스터 · {INSTRUMENTS.length}종목</span></div>
+            <div className="instrument-selector"><label htmlFor="instrument-select">엔진 랩 종목</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>내부 매칭 검증용 · {INSTRUMENTS.length}종목</span></div>
             <div className="quote-block"><span className="quote-label">최근 체결</span><strong>{formatPrice(lastTrade)}</strong><span className="muted">MD-A seq {formatNumber(book.sequence)}</span></div>
             <div className="instrument-actions"><span className="api-status"><span className="tiny-dot green" /> 회원사 시험망 · 인증 적용</span><button className="ghost-button" onClick={resetEngine}>새로고침</button></div>
           </div>
 
-          <section className="feed-warning"><span className="warning-icon">C</span><div><strong>회원사 적합성 시험환경 · 실제 운영시장과 결제망에는 연결되지 않습니다.</strong><span>시험 주문은 게이트웨이 순번·서명·사전위험검사를 통과한 뒤 결정론적 가격·시간 우선 엔진에서 체결됩니다.</span></div></section>
+          <section className="feed-warning"><span className="warning-icon">L</span><div><strong>아래 영역은 ATS 매칭엔진 검증 랩입니다.</strong><span>실제 현금 주문은 위 ‘실거래 주문·체결 콘솔’에서만 증권사로 전송됩니다. 랩 주문은 실제 계좌에 영향을 주지 않습니다.</span></div></section>
 
           <section className="engine-profile" aria-label="엔진 프로파일"><div><span>MATCHING POLICY</span><strong>DETERMINISTIC PRICE / TIME</strong></div><div><span>ORDER GATEWAY</span><strong>MEMBER SESSION · HMAC · SEQUENCE</strong></div><div><span>RECOVERY</span><strong>WAL · SNAPSHOT · DISTRIBUTED LEADER LOCK</strong></div><div className="profile-lock"><span className={`tiny-dot ${venueControl?.haltMode === "OPEN" ? "green" : "amber"}`} /> {venueControl?.haltMode === "FULL_STOP" ? "VENUE FULL STOP" : venueControl?.haltMode === "CANCEL_ONLY" ? "CANCEL ONLY" : "ORDER GATE OPEN"}</div></section>
 
@@ -337,7 +342,7 @@ export default function Home() {
 
           <div className="dashboard-grid">
             <section className="panel order-panel">
-              <div className="panel-heading"><div><span className="section-kicker">CERTIFICATION ORDER ENTRY</span><h2>회원사 시험 주문</h2></div><span className="latency-badge">OE-A</span></div>
+              <div className="panel-heading"><div><span className="section-kicker">ATS ENGINE LAB</span><h2>매칭엔진 검증 주문</h2></div><span className="latency-badge">LAB</span></div>
               <div className="segmented"><button className={side === "BUY" ? "selected-buy" : ""} onClick={() => setSide("BUY")}>매수</button><button className={side === "SELL" ? "selected-sell" : ""} onClick={() => setSide("SELL")}>매도</button></div>
               <div className="order-tabs"><button type="button" className={orderType === "LIMIT" ? "active" : ""} onClick={() => setOrderType("LIMIT")}>지정가</button><button type="button" className={orderType === "MARKET" ? "active" : ""} onClick={() => { setOrderType("MARKET"); setTimeInForce("IOC"); }}>시장가</button><button type="button" className={orderType === "MIDPOINT" ? "active" : ""} onClick={() => { setOrderType("MIDPOINT"); setTimeInForce("GTC"); }}>중간가</button><button type="button" className={orderType === "STOP_LIMIT" ? "active" : ""} onClick={() => { setOrderType("STOP_LIMIT"); setTimeInForce("GTC"); }}>스톱지정가</button></div>
               <div className="tif-row" aria-label="주문 유효조건"><span>유효조건</span><button type="button" className={orderType === "MARKET" || timeInForce === "GTC" ? "active" : ""} onClick={() => setTimeInForce("GTC")} disabled={orderType === "MARKET"}>GTC · 잔량유지</button><button type="button" className={orderType !== "MARKET" && timeInForce === "IOC" ? "active" : ""} onClick={() => setTimeInForce("IOC")}>IOC · 즉시취소</button><button type="button" className={orderType !== "MARKET" && timeInForce === "FOK" ? "active" : ""} onClick={() => setTimeInForce("FOK")}>FOK · 전량체결</button></div>
@@ -352,7 +357,7 @@ export default function Home() {
                 <div className="number-input"><input aria-label="주문 수량" type="number" step="1" min="1" value={quantity} onChange={(event) => setQuantity(event.target.value)} /><span>주</span></div>
                 <div className="quantity-presets"><button type="button" onClick={() => setQuantity("1")}>1</button><button type="button" onClick={() => setQuantity("10")}>10</button><button type="button" onClick={() => setQuantity("100")}>100</button><button type="button" onClick={() => setQuantity("1000")}>1,000</button></div>
                 <div className="estimate"><span>주문금액</span><strong>{orderType === "MARKET" ? "시장가" : orderType === "MIDPOINT" ? "NBBO 중간가" : formatPrice((Number(price) || 0) * (Number(quantity) || 0))}</strong></div>
-                <button className={`submit-order ${side === "BUY" ? "buy" : "sell"}`} type="submit" disabled={!session}>{session ? (side === "BUY" ? "매수 주문" : "매도 주문") : "로그인 후 주문"}<span>⌘ ↵</span></button>
+                <button className={`submit-order ${side === "BUY" ? "buy" : "sell"}`} type="submit" disabled={!session}>{session ? (side === "BUY" ? "LAB 매수 주문" : "LAB 매도 주문") : "로그인 후 LAB 주문"}<span>실계좌 영향 없음</span></button>
               </form>
               <div className="engine-message" aria-live="polite"><span className="tiny-dot green" />{message}</div>
               <div className="risk-check" id="risk-controls"><div className="risk-title"><span>사전 리스크 체크</span><span className={riskView?.risk.halted ? "sell-color" : "positive"}>{riskView?.risk.halted ? "HALTED" : "ACTIVE"}</span></div><div className="risk-row"><span>미체결 주문</span><span>{formatNumber(riskView?.risk.openOrders ?? 0)} / {formatNumber(riskView?.risk.limits.maxOpenOrders ?? 1000)}건</span></div><div className="risk-meter"><span style={{ width: `${Math.min(100, riskView?.exposure.openOrderUtilizationPercent ?? 0)}%` }} /></div><div className="risk-row"><span>예약 주문금액</span><span>{formatNumber(riskView?.exposure.reservedCash ?? 0)}원 · {riskView?.exposure.reservedCashPercent ?? 0}%</span></div><div className="risk-row"><span>주문당 최대수량</span><span>{formatNumber(riskView?.risk.limits.maxOrderQuantity ?? 100000)}주</span></div><div className="risk-row"><span>주문당 최대금액</span><span>{formatNumber(riskView?.risk.limits.maxOrderNotional ?? 1000000000)}원</span></div><div className="risk-row"><span>감사 무결성</span><span className={auditIntegrity?.ok ? "positive" : "sell-color"}>{auditIntegrity?.ok ? `${auditIntegrity.checked}건 검증` : "확인 중"}</span></div><div className="risk-row"><span>자기체결 방지</span><span>CANCEL_TAKER</span></div></div>
@@ -382,7 +387,7 @@ export default function Home() {
 
           <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>발동가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : order.type === "MARKET" ? "시장가" : order.type === "MIDPOINT" ? "중간가" : "스톱지정가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatPrice(order.stopPrice ?? null)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "PENDING_TRIGGER" ? "발동대기" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={14} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
           {session ? <InstitutionalArchitecturePanel /> : null}
-          <footer className="page-footer"><span>TradingStockSysyem · institutional ATS certification venue</span><span><span className="tiny-dot green" /> MEMBER GATEWAY · MATCHING CORE · MARKET DATA · DROP COPY</span></footer>
+          <footer className="page-footer"><span>TradingStockSysyem · multi-user live broker routing &amp; ATS engine lab</span><span><span className="tiny-dot green" /> ENCRYPTED VAULT · PRE-TRADE RISK · KIS · KRX / NXT / SOR</span></footer>
         </div>
       </section>
     </main>

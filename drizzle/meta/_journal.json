@@ -36,6 +36,13 @@
       "when": 1786262241838,
       "tag": "0004_loving_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1786281646911,
+      "tag": "0005_bright_marauders",
+      "breakpoints": true
     }
   ]
 }
