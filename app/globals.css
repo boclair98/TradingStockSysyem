@@ -358,6 +358,11 @@ h2 { margin: 7px 0 0; font-size: 15px; letter-spacing: -.03em; }
 .mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
 .mode-switch button { padding: 8px; border: 1px solid var(--line); border-radius: 5px; background: #13171d; color: var(--muted); font-size: 8px; }
 .mode-switch button.active { border-color: var(--cyan); color: var(--cyan); }.mode-switch button.active.danger { border-color: rgba(251,114,126,.45); color: var(--red); background: rgba(251,114,126,.07); }
+.provider-switch { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.provider-switch button { padding: 8px 4px; border: 1px solid var(--line); border-radius: 5px; background: #13171d; color: var(--muted); font-size: 8px; }
+.provider-switch button.active { border-color: var(--cyan); color: var(--cyan); background: rgba(88,212,209,.06); }
+.broker-roadmap { display: grid; gap: 5px; padding: 9px 10px; border: 1px solid var(--line-soft); border-radius: 6px; background: #0a0d12; color: var(--muted-2); font-size: 7px; }
+.broker-roadmap strong { color: var(--cyan); margin-right: 5px; }
 .primary-button { border: 1px solid rgba(53,203,139,.45); border-radius: 7px; background: linear-gradient(135deg, #28a975, #36c789); color: #061b13; padding: 9px 11px; font-size: 9px; font-weight: 900; }
 .primary-button:disabled, .ghost-button:disabled, .danger-button:disabled { opacity: .4; cursor: not-allowed; }
 .connection-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 10px 14px; border-top: 1px solid var(--line-soft); color: var(--muted-2); font-size: 7px; }
