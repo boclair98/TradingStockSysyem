@@ -17,7 +17,7 @@
 - `engine/matchingEngine.ts`: 브라우저와 규칙 검증용 TypeScript 참조 엔진
 - `db/`: 시험 원장·Drop Copy·감사 해시체인·운영 상태
 - `app/`: 기술실사·운영 UI
-- `engine/liveTradingService.ts`: 토스증권·한국투자증권 사용자 주문 라우팅 어댑터이며 ATS 코어와 분리
+- `engine/liveTradingService.ts`: 토스증권·한국투자증권·키움증권 사용자 주문 라우팅 어댑터이며 ATS 코어와 분리
 
 ## 독립 Venue Core
 
@@ -57,7 +57,14 @@ powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/benchmark.ps1
 
 ## 증권사 실계좌 어댑터
 
-토스증권 Open API와 한국투자증권 Open Trading API 기반 계좌 연결, 잔고·시세 조회, 현금 주문, 취소, 체결대사 기능이 별도 어댑터로 존재합니다. 토스증권 국내주식 주문은 공식 API 제약에 맞춰 SOR·DAY만 허용합니다.
+토스증권 Open API, 한국투자증권 Open Trading API, 키움 REST API 기반 계좌 연결, 잔고·시세 조회, 현금 주문, 취소, 체결대사 기능이 별도 어댑터로 존재합니다. 토스증권 국내주식 주문은 공식 API 제약에 맞춰 SOR·DAY만 허용하고, 키움 모의투자는 KRX만 허용합니다.
+
+| 증권사 | 실전 | 모의 | 라우팅 | 연결 방식 |
+|---|---:|---:|---|---|
+| 토스증권 | 지원 | 미지원 | SOR / DAY | Client ID·Secret, 계좌 자동조회 |
+| 한국투자증권 | 지원 | 지원 | KRX·NXT·SOR | App Key·Secret, 계좌번호 |
+| 키움증권 | 지원 | 지원 | 실전 KRX·NXT·SOR, 모의 KRX | App Key·Secret, 계좌 자동조회 |
+| LS증권·기타 | 준비 중 | - | 공식 주문 API·사업자 계약 확인 후 | 미노출 |
 
 이 어댑터는 ATS 회원사 접속 인터페이스를 대체하지 않으며 거래소 data-plane과 함께 배포해서는 안 됩니다. 실전 주문은 서버 스위치, 증권사 등록 고정 출발 IP, 사용자 위험동의, 킬 스위치 해제, 60초 주문 미리보기와 확인문구가 모두 통과해야 전송됩니다. 공개 배포는 주문 게이트가 잠긴 상태가 기본입니다.
 
@@ -79,6 +86,7 @@ powershell -ExecutionPolicy Bypass -File venue-core-java/scripts/benchmark.ps1
 - [성능 기준선](docs/PERFORMANCE_BASELINE.md)
 - [운영 전환 경계](docs/PRODUCTION_READINESS.md)
 - [실거래 브로커 출시 체크리스트](docs/LIVE_BROKER_RELEASE_KO.md)
+- [증권사 지원 및 연결 매트릭스](docs/BROKER_SUPPORT_MATRIX_KO.md)
 
 ## 웹 검증
 

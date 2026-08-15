@@ -2,6 +2,7 @@ import { addAudit, deleteBrokerConnection, listBrokerConnections, saveBrokerConn
 import { consumeLiveOrderPreview, createLiveOrderPreview, createPendingLiveOrder, deleteBrokerToken, getBrokerConnectionSecret, getBrokerToken, getLiveOrder, getLiveRiskPolicy, getLiveRiskUsage, listLiveOrders, listLiveOrdersForConnection, saveBrokerToken, updateBrokerConnectionState, updateLiveOrderBrokerState, type LiveOrderRequestRecord } from "../db/liveTrading";
 import { credentialFingerprint, decryptCredential, encryptCredential, maskAccount } from "./credentialVault";
 import { cancelKisOrder, getKisAccount, getKisDailyOrders, getKisQuote, issueKisToken, KisApiError, submitKisCashOrder, type KisCredentials, type KisMode } from "./koreaInvestmentClient";
+import { cancelKiwoomOrder, getKiwoomAccount, getKiwoomAccountNumber, getKiwoomOrders, getKiwoomQuote, issueKiwoomToken, KiwoomApiError, submitKiwoomCashOrder, type KiwoomCredentials, type KiwoomMode } from "./kiwoomClient";
 import { cancelTossOrder, getTossAccount, getTossAccounts, getTossOrders, getTossQuote, getTossSellableQuantity, issueTossToken, submitTossCashOrder, TossApiError, type TossCredentials } from "./tossInvestmentClient";
 
 const LIVE_CONFIRMATION = "실거래 주문 실행";
@@ -11,7 +12,8 @@ const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true" &&
 type StoredConnection = NonNullable<Awaited<ReturnType<typeof getBrokerConnectionSecret>>>;
 type KisBundle = { provider: "korea_investment"; connection: StoredConnection; credentials: KisCredentials };
 type TossBundle = { provider: "toss_investment"; connection: StoredConnection; credentials: TossCredentials };
-type ConnectionBundle = KisBundle | TossBundle;
+type KiwoomBundle = { provider: "kiwoom"; connection: StoredConnection; credentials: KiwoomCredentials };
+type ConnectionBundle = KisBundle | TossBundle | KiwoomBundle;
 
 function validateKis(credentials: KisCredentials) {
   if (credentials.appKey.trim().length < 10) throw new Error("App Key 형식을 확인하세요.");
@@ -25,6 +27,12 @@ function validateToss(credentials: TossCredentials) {
   if (credentials.clientSecret.trim().length < 8) throw new Error("토스증권 Client Secret 형식을 확인하세요.");
   if (!Number.isSafeInteger(credentials.accountSeq) || credentials.accountSeq <= 0) throw new Error("토스증권 계좌 식별값을 확인하세요.");
   if (!credentials.accountNo.trim()) throw new Error("토스증권 계좌번호를 확인할 수 없습니다.");
+}
+
+function validateKiwoom(credentials: KiwoomCredentials) {
+  if (credentials.appKey.trim().length < 8) throw new Error("키움증권 App Key 형식을 확인하세요.");
+  if (credentials.secretKey.trim().length < 8) throw new Error("키움증권 Secret Key 형식을 확인하세요.");
+  if (!/^\d{10}$/.test(credentials.accountNo)) throw new Error("키움증권 계좌번호를 확인할 수 없습니다.");
 }
 
 function validateOrder(request: LiveOrderRequestRecord) {
@@ -53,6 +61,11 @@ async function connectionBundle(userId: string, connectionId: string): Promise<C
     validateToss(credentials);
     return { provider: "toss_investment", connection, credentials };
   }
+  if (connection.provider === "kiwoom") {
+    const credentials = await decryptCredential<KiwoomCredentials>(connection.credentialCiphertext, userId, connection.id);
+    validateKiwoom(credentials);
+    return { provider: "kiwoom", connection, credentials };
+  }
   throw new Error("지원하지 않는 증권사 연결입니다.");
 }
 
@@ -66,14 +79,16 @@ async function accessToken(bundle: ConnectionBundle) {
   }
   const issued = bundle.provider === "korea_investment"
     ? await issueKisToken(bundle.credentials, bundle.connection.mode as KisMode)
-    : await issueTossToken(bundle.credentials);
+    : bundle.provider === "kiwoom"
+      ? await issueKiwoomToken(bundle.credentials, bundle.connection.mode as KiwoomMode)
+      : await issueTossToken(bundle.credentials);
   const sealed = await encryptCredential({ accessToken: issued.accessToken }, bundle.connection.userId, `token:${bundle.connection.id}`);
   await saveBrokerToken(bundle.connection.id, sealed, issued.expiresAt);
   return issued.accessToken;
 }
 
 function brokerFailure(error: unknown, fallback: string) {
-  if (error instanceof KisApiError || error instanceof TossApiError) return error;
+  if (error instanceof KisApiError || error instanceof TossApiError || error instanceof KiwoomApiError) return error;
   return new KisApiError(fallback, error instanceof Error ? error.message : "증권사 요청에 실패했습니다.");
 }
 
@@ -81,7 +96,12 @@ export function getLiveServiceReadiness() {
   return {
     globalLiveEnabled: GLOBAL_LIVE_ENABLED(),
     egressReady: EGRESS_READY(),
-    providers: ["toss_investment", "korea_investment"],
+    providers: ["toss_investment", "korea_investment", "kiwoom"],
+    providerCapabilities: {
+      toss_investment: { production: true, sandbox: false, venues: ["SOR"], timeInForce: ["DAY"] },
+      korea_investment: { production: true, sandbox: true, venues: ["KRX", "NXT", "SOR"], timeInForce: ["DAY", "IOC", "FOK"] },
+      kiwoom: { production: true, sandbox: true, venues: ["KRX", "NXT", "SOR"], sandboxVenues: ["KRX"], timeInForce: ["DAY", "IOC", "FOK"] },
+    },
     productionOrderEndpoint: "broker-adapter/order-cash",
     executionReconciliation: "broker order history reconciliation",
     safeguards: ["per-user encrypted credentials", "server + egress + user + order four-stage arming", "one-time 60 second preview", "idempotent local order journal", "unknown-state reconciliation", "kill switch", "cash-only risk limits"],
@@ -139,6 +159,34 @@ export async function connectTossInvestment(userId: string, input: { accountLabe
   }
 }
 
+export async function connectKiwoom(userId: string, input: { mode: KiwoomMode; accountLabel: string; appKey: string; secretKey: string }) {
+  const client = { appKey: input.appKey.trim(), secretKey: input.secretKey.trim() };
+  if (client.appKey.length < 8 || client.secretKey.length < 8) throw new Error("키움증권 App Key와 Secret Key를 확인하세요.");
+  const issued = await issueKiwoomToken(client, input.mode);
+  const accountNo = await getKiwoomAccountNumber(input.mode, issued.accessToken);
+  const credentials: KiwoomCredentials = { ...client, accountNo };
+  validateKiwoom(credentials);
+  const fingerprint = await credentialFingerprint(`${accountNo}:${client.appKey}`);
+  const accountRef = `${maskAccount(accountNo.slice(0, 8), accountNo.slice(8))}#${fingerprint}`;
+  const existing = (await listBrokerConnections(userId)).find((item) => item.provider === "kiwoom" && item.accountRef === accountRef);
+  const id = existing?.id ?? `KIWOOM-${crypto.randomUUID()}`;
+  const sealed = await encryptCredential(credentials, userId, id);
+  await saveBrokerConnection({ id, userId, provider: "kiwoom", mode: input.mode, accountLabel: input.accountLabel.trim() || "키움증권", accountRef, credentialCiphertext: sealed, status: "pending" });
+  const tokenSealed = await encryptCredential({ accessToken: issued.accessToken }, userId, `token:${id}`);
+  await saveBrokerToken(id, tokenSealed, issued.expiresAt);
+  try {
+    const account = await getLiveAccount(userId, id);
+    await updateBrokerConnectionState(userId, id, "connected", null);
+    await addAudit(userId, "LIVE_BROKER_CONNECTED", id, { provider: "kiwoom", mode: input.mode, accountRef });
+    return { connection: (await listBrokerConnections(userId)).find((item) => item.id === id), account };
+  } catch (error) {
+    const message = brokerFailure(error, "CONNECTION_FAILED").message;
+    await updateBrokerConnectionState(userId, id, "error", message.slice(0, 300));
+    await addAudit(userId, "LIVE_BROKER_CONNECTION_FAILED", id, { provider: "kiwoom", error: message.slice(0, 120) });
+    throw error;
+  }
+}
+
 export async function disconnectLiveBroker(userId: string, connectionId: string) {
   await deleteBrokerToken(connectionId);
   const deleted = await deleteBrokerConnection(userId, connectionId);
@@ -151,7 +199,9 @@ export async function getLiveAccount(userId: string, connectionId: string) {
   const token = await accessToken(bundle);
   const account = bundle.provider === "korea_investment"
     ? await getKisAccount(bundle.credentials, bundle.connection.mode as KisMode, token)
-    : await getTossAccount(bundle.credentials, token);
+    : bundle.provider === "kiwoom"
+      ? await getKiwoomAccount(bundle.credentials, bundle.connection.mode as KiwoomMode, token)
+      : await getTossAccount(bundle.credentials, token);
   await updateBrokerConnectionState(userId, connectionId, "connected", null);
   return account;
 }
@@ -161,7 +211,9 @@ export async function getLiveQuote(userId: string, connectionId: string, symbol:
   const token = await accessToken(bundle);
   return bundle.provider === "korea_investment"
     ? getKisQuote(bundle.credentials, bundle.connection.mode as KisMode, token, symbol, venue === "KRX" ? "KRX" : venue === "NXT" ? "NXT" : "UNIFIED")
-    : getTossQuote(bundle.credentials, token, symbol);
+    : bundle.provider === "kiwoom"
+      ? getKiwoomQuote(bundle.credentials, bundle.connection.mode as KiwoomMode, token, symbol, venue)
+      : getTossQuote(bundle.credentials, token, symbol);
 }
 
 async function requestHash(value: unknown) {
@@ -221,7 +273,9 @@ export async function submitPreviewedLiveOrder(userId: string, previewId: string
     const token = await accessToken(bundle);
     const receipt = bundle.provider === "korea_investment"
       ? await submitKisCashOrder(bundle.credentials, bundle.connection.mode as KisMode, token, preview.request)
-      : await submitTossCashOrder(bundle.credentials, token, { ...preview.request, clientOrderId });
+      : bundle.provider === "kiwoom"
+        ? await submitKiwoomCashOrder(bundle.credentials, bundle.connection.mode as KiwoomMode, token, preview.request)
+        : await submitTossCashOrder(bundle.credentials, token, { ...preview.request, clientOrderId });
     if (!receipt.brokerOrderId) throw new KisApiError("ORDER_ID_MISSING", "증권사 주문번호가 반환되지 않아 대사가 필요합니다.", 502, true);
     const updated = await updateLiveOrderBrokerState(userId, orderId, { brokerOrderId: receipt.brokerOrderId, brokerOrgNo: receipt.brokerOrgNo || null, status: "SUBMITTED", brokerCode: receipt.code, brokerMessage: receipt.message });
     await addAudit(userId, "LIVE_ORDER_SUBMITTED", orderId, { provider: bundle.provider, brokerOrderId: receipt.brokerOrderId, symbol: preview.request.symbol, side: preview.request.side, quantity: preview.request.quantity, venue: preview.request.venue });
@@ -246,7 +300,9 @@ export async function cancelLiveOrder(userId: string, orderId: string) {
     const token = await accessToken(bundle);
     const receipt = bundle.provider === "korea_investment"
       ? await cancelKisOrder(bundle.credentials, bundle.connection.mode as KisMode, token, { brokerOrderId: order.brokerOrderId, brokerOrgNo: order.brokerOrgNo!, quantity: Math.max(1, order.quantity - order.executedQuantity), venue: order.venue })
-      : await cancelTossOrder(bundle.credentials, token, order.brokerOrderId);
+      : bundle.provider === "kiwoom"
+        ? await cancelKiwoomOrder(bundle.credentials, bundle.connection.mode as KiwoomMode, token, { brokerOrderId: order.brokerOrderId, symbol: order.symbol, venue: order.venue })
+        : await cancelTossOrder(bundle.credentials, token, order.brokerOrderId);
     const updated = await updateLiveOrderBrokerState(userId, orderId, { status: "CANCEL_REQUESTED", brokerCode: receipt.code, brokerMessage: receipt.message });
     await addAudit(userId, "LIVE_ORDER_CANCEL_REQUESTED", orderId, { provider: bundle.provider, brokerOrderId: order.brokerOrderId });
     return updated;
@@ -276,6 +332,20 @@ export async function reconcileLiveOrders(userId: string, connectionId: string) 
       const status = statusMap[broker.status] ?? "UNKNOWN";
       if (status !== local.status || broker.filledQuantity !== local.executedQuantity || broker.averageFilledPrice !== local.averagePrice) {
         await updateLiveOrderBrokerState(userId, local.id, { status, executedQuantity: broker.filledQuantity, averagePrice: broker.averageFilledPrice, brokerCode: "RECONCILED", brokerMessage: "토스증권 주문체결조회 대사 완료" });
+        updatedCount += 1;
+      }
+    }
+  } else if (bundle.provider === "kiwoom") {
+    const orders = await getKiwoomOrders(bundle.credentials, bundle.connection.mode as KiwoomMode, token);
+    brokerRows = orders.length;
+    for (const local of localOrders) {
+      const broker = orders.find((item) => item.orderId === local.brokerOrderId);
+      if (!broker) continue;
+      const cancelled = /취소|CANCEL/i.test(broker.status);
+      const rejected = /거부|REJECT/i.test(broker.status);
+      const status = rejected ? "REJECTED" : cancelled ? "CANCELLED" : broker.filledQuantity >= local.quantity ? "FILLED" : broker.filledQuantity > 0 ? "PARTIAL" : broker.remainingQuantity === 0 && local.status === "CANCEL_REQUESTED" ? "CANCELLED" : "SUBMITTED";
+      if (status !== local.status || broker.filledQuantity !== local.executedQuantity || broker.averageFilledPrice !== local.averagePrice) {
+        await updateLiveOrderBrokerState(userId, local.id, { status, executedQuantity: broker.filledQuantity, averagePrice: broker.averageFilledPrice, brokerCode: "RECONCILED", brokerMessage: "키움증권 주문체결조회 대사 완료" });
         updatedCount += 1;
       }
     }

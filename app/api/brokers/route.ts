@@ -1,6 +1,6 @@
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { ensurePaperUser, listBrokerConnections } from "../../../db/trading";
-import { connectKoreaInvestment, connectTossInvestment, disconnectLiveBroker } from "../../../engine/liveTradingService";
+import { connectKiwoom, connectKoreaInvestment, connectTossInvestment, disconnectLiveBroker } from "../../../engine/liveTradingService";
 import type { KisCredentials, KisMode } from "../../../engine/koreaInvestmentClient";
 
 export const dynamic = "force-dynamic";
@@ -20,7 +20,7 @@ export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
   await ensurePaperUser(user);
-  let body: { provider?: "toss_investment" | "korea_investment"; mode?: KisMode; accountLabel?: string; clientId?: string; clientSecret?: string; accountSeq?: number; appKey?: string; appSecret?: string; accountNumber?: string; productCode?: string; htsId?: string };
+  let body: { provider?: "toss_investment" | "korea_investment" | "kiwoom"; mode?: KisMode; accountLabel?: string; clientId?: string; clientSecret?: string; accountSeq?: number; appKey?: string; appSecret?: string; accountNumber?: string; productCode?: string; htsId?: string };
   try { body = await request.json() as typeof body; } catch { return Response.json({ error: "request body must be valid JSON" }, { status: 400 }); }
   try {
     if (body.provider === "toss_investment") {
@@ -28,6 +28,11 @@ export async function POST(request: Request) {
       return Response.json({ connected: true, ...result }, { status: 201, headers: { "Cache-Control": "no-store" } });
     }
     if (body.mode !== "sandbox" && body.mode !== "production") return Response.json({ error: "mode must be sandbox or production" }, { status: 400 });
+    if (body.provider === "kiwoom") {
+      const result = await connectKiwoom(user.userId, { mode: body.mode, accountLabel: body.accountLabel ?? "키움증권", appKey: body.appKey ?? "", secretKey: body.appSecret ?? "" });
+      return Response.json({ connected: true, ...result }, { status: 201, headers: { "Cache-Control": "no-store" } });
+    }
+    if (body.provider !== "korea_investment") return Response.json({ error: "지원하지 않는 증권사입니다." }, { status: 400 });
     const credentials: KisCredentials = { appKey: body.appKey?.trim() ?? "", appSecret: body.appSecret?.trim() ?? "", accountNumber: body.accountNumber?.replaceAll("-", "").trim() ?? "", productCode: body.productCode?.trim() ?? "", htsId: body.htsId?.trim() ?? "" };
     const result = await connectKoreaInvestment(user.userId, { mode: body.mode, accountLabel: body.accountLabel ?? "한국투자증권", credentials });
     return Response.json({ connected: true, ...result }, { status: 201, headers: { "Cache-Control": "no-store" } });
