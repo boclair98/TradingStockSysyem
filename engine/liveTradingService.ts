@@ -1,27 +1,39 @@
 import { addAudit, deleteBrokerConnection, listBrokerConnections, saveBrokerConnection } from "../db/trading";
 import { consumeLiveOrderPreview, createLiveOrderPreview, createPendingLiveOrder, deleteBrokerToken, getBrokerConnectionSecret, getBrokerToken, getLiveOrder, getLiveRiskPolicy, getLiveRiskUsage, listLiveOrders, listLiveOrdersForConnection, saveBrokerToken, updateBrokerConnectionState, updateLiveOrderBrokerState, type LiveOrderRequestRecord } from "../db/liveTrading";
 import { credentialFingerprint, decryptCredential, encryptCredential, maskAccount } from "./credentialVault";
-import { cancelKisOrder, getKisAccount, getKisDailyOrders, getKisQuote, issueKisToken, KisApiError, submitKisCashOrder, type KisAccountSnapshot, type KisCredentials, type KisMode, type KisQuote } from "./koreaInvestmentClient";
+import { cancelKisOrder, getKisAccount, getKisDailyOrders, getKisQuote, issueKisToken, KisApiError, submitKisCashOrder, type KisCredentials, type KisMode } from "./koreaInvestmentClient";
+import { cancelTossOrder, getTossAccount, getTossAccounts, getTossOrders, getTossQuote, getTossSellableQuantity, issueTossToken, submitTossCashOrder, TossApiError, type TossCredentials } from "./tossInvestmentClient";
 
 const LIVE_CONFIRMATION = "실거래 주문 실행";
-const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true";
+const EGRESS_READY = () => process.env.LIVE_TRADING_EGRESS_READY === "true";
+const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true" && EGRESS_READY();
 
-type ConnectionBundle = { connection: NonNullable<Awaited<ReturnType<typeof getBrokerConnectionSecret>>>; credentials: KisCredentials };
+type StoredConnection = NonNullable<Awaited<ReturnType<typeof getBrokerConnectionSecret>>>;
+type KisBundle = { provider: "korea_investment"; connection: StoredConnection; credentials: KisCredentials };
+type TossBundle = { provider: "toss_investment"; connection: StoredConnection; credentials: TossCredentials };
+type ConnectionBundle = KisBundle | TossBundle;
 
-function validateCredentials(credentials: KisCredentials) {
+function validateKis(credentials: KisCredentials) {
   if (credentials.appKey.trim().length < 10) throw new Error("App Key 형식을 확인하세요.");
   if (credentials.appSecret.trim().length < 10) throw new Error("App Secret 형식을 확인하세요.");
   if (!/^\d{8}$/.test(credentials.accountNumber)) throw new Error("계좌번호 앞 8자리를 입력하세요.");
   if (!/^\d{2}$/.test(credentials.productCode)) throw new Error("계좌상품코드 2자리를 입력하세요.");
 }
 
+function validateToss(credentials: TossCredentials) {
+  if (credentials.clientId.trim().length < 8) throw new Error("토스증권 Client ID 형식을 확인하세요.");
+  if (credentials.clientSecret.trim().length < 8) throw new Error("토스증권 Client Secret 형식을 확인하세요.");
+  if (!Number.isSafeInteger(credentials.accountSeq) || credentials.accountSeq <= 0) throw new Error("토스증권 계좌 식별값을 확인하세요.");
+  if (!credentials.accountNo.trim()) throw new Error("토스증권 계좌번호를 확인할 수 없습니다.");
+}
+
 function validateOrder(request: LiveOrderRequestRecord) {
   if (!/^\d{6}$/.test(request.symbol)) throw new Error("국내주식 종목코드 6자리를 입력하세요.");
-  if (!(["BUY", "SELL"] as const).includes(request.side)) throw new Error("매수·매도 구분을 확인하세요.");
-  if (!(["LIMIT", "MARKET"] as const).includes(request.orderType)) throw new Error("주문유형을 확인하세요.");
-  if (!(["DAY", "IOC", "FOK"] as const).includes(request.timeInForce)) throw new Error("주문 유효조건을 확인하세요.");
-  if (!(["KRX", "NXT", "SOR"] as const).includes(request.venue)) throw new Error("주문 라우팅 시장을 확인하세요.");
-  if (!request.connectionId?.startsWith("KIS-")) throw new Error("증권계좌 연결을 확인하세요.");
+  if (!["BUY", "SELL"].includes(request.side)) throw new Error("매수·매도 구분을 확인하세요.");
+  if (!["LIMIT", "MARKET"].includes(request.orderType)) throw new Error("주문유형을 확인하세요.");
+  if (!["DAY", "IOC", "FOK"].includes(request.timeInForce)) throw new Error("주문 유효조건을 확인하세요.");
+  if (!["KRX", "NXT", "SOR"].includes(request.venue)) throw new Error("주문 라우팅 시장을 확인하세요.");
+  if (!request.connectionId) throw new Error("증권계좌 연결을 확인하세요.");
   if (!Number.isSafeInteger(request.quantity) || request.quantity <= 0) throw new Error("주문수량은 양의 정수여야 합니다.");
   if (request.orderType === "LIMIT" && (!Number.isSafeInteger(request.price) || (request.price ?? 0) <= 0 || (request.price ?? 0) > 100_000_000)) throw new Error("지정가 주문가격을 확인하세요.");
   if (request.orderType === "MARKET" && request.price != null) throw new Error("시장가 주문에는 가격을 입력하지 않습니다.");
@@ -29,11 +41,19 @@ function validateOrder(request: LiveOrderRequestRecord) {
 
 async function connectionBundle(userId: string, connectionId: string): Promise<ConnectionBundle> {
   const connection = await getBrokerConnectionSecret(userId, connectionId);
-  if (!connection || connection.provider !== "korea_investment" || !connection.credentialCiphertext) throw new Error("한국투자증권 연결을 찾을 수 없습니다.");
+  if (!connection?.credentialCiphertext) throw new Error("증권계좌 연결을 찾을 수 없습니다.");
   if (connection.status === "disabled") throw new Error("비활성화된 증권계좌입니다.");
-  const credentials = await decryptCredential<KisCredentials>(connection.credentialCiphertext, userId, connection.id);
-  validateCredentials(credentials);
-  return { connection, credentials };
+  if (connection.provider === "korea_investment") {
+    const credentials = await decryptCredential<KisCredentials>(connection.credentialCiphertext, userId, connection.id);
+    validateKis(credentials);
+    return { provider: "korea_investment", connection, credentials };
+  }
+  if (connection.provider === "toss_investment") {
+    const credentials = await decryptCredential<TossCredentials>(connection.credentialCiphertext, userId, connection.id);
+    validateToss(credentials);
+    return { provider: "toss_investment", connection, credentials };
+  }
+  throw new Error("지원하지 않는 증권사 연결입니다.");
 }
 
 async function accessToken(bundle: ConnectionBundle) {
@@ -42,28 +62,34 @@ async function accessToken(bundle: ConnectionBundle) {
     try {
       const token = await decryptCredential<{ accessToken: string }>(cached.tokenCiphertext, bundle.connection.userId, `token:${bundle.connection.id}`);
       if (token.accessToken) return token.accessToken;
-    } catch {
-      await deleteBrokerToken(bundle.connection.id);
-    }
+    } catch { await deleteBrokerToken(bundle.connection.id); }
   }
-  const issued = await issueKisToken(bundle.credentials, bundle.connection.mode as KisMode);
+  const issued = bundle.provider === "korea_investment"
+    ? await issueKisToken(bundle.credentials, bundle.connection.mode as KisMode)
+    : await issueTossToken(bundle.credentials);
   const sealed = await encryptCredential({ accessToken: issued.accessToken }, bundle.connection.userId, `token:${bundle.connection.id}`);
   await saveBrokerToken(bundle.connection.id, sealed, issued.expiresAt);
   return issued.accessToken;
 }
 
+function brokerFailure(error: unknown, fallback: string) {
+  if (error instanceof KisApiError || error instanceof TossApiError) return error;
+  return new KisApiError(fallback, error instanceof Error ? error.message : "증권사 요청에 실패했습니다.");
+}
+
 export function getLiveServiceReadiness() {
   return {
     globalLiveEnabled: GLOBAL_LIVE_ENABLED(),
-    provider: "korea_investment",
-    productionOrderEndpoint: "/uapi/domestic-stock/v1/trading/order-cash",
-    executionReconciliation: "REST daily fills + H0STCNI0 feed contract",
-    safeguards: ["per-user encrypted credentials", "server + user + order three-stage arming", "one-time 60 second preview", "idempotent local order journal", "unknown-state reconciliation", "kill switch", "cash-only risk limits"],
+    egressReady: EGRESS_READY(),
+    providers: ["toss_investment", "korea_investment"],
+    productionOrderEndpoint: "broker-adapter/order-cash",
+    executionReconciliation: "broker order history reconciliation",
+    safeguards: ["per-user encrypted credentials", "server + egress + user + order four-stage arming", "one-time 60 second preview", "idempotent local order journal", "unknown-state reconciliation", "kill switch", "cash-only risk limits"],
   };
 }
 
 export async function connectKoreaInvestment(userId: string, input: { mode: KisMode; accountLabel: string; credentials: KisCredentials }) {
-  validateCredentials(input.credentials);
+  validateKis(input.credentials);
   const fingerprint = await credentialFingerprint(`${input.credentials.accountNumber}:${input.credentials.productCode}:${input.credentials.appKey}`);
   const accountRef = `${maskAccount(input.credentials.accountNumber, input.credentials.productCode)}#${fingerprint}`;
   const existing = (await listBrokerConnections(userId)).find((item) => item.provider === "korea_investment" && item.accountRef === accountRef);
@@ -76,9 +102,39 @@ export async function connectKoreaInvestment(userId: string, input: { mode: KisM
     await addAudit(userId, "LIVE_BROKER_CONNECTED", id, { provider: "korea_investment", mode: input.mode, accountRef });
     return { connection: (await listBrokerConnections(userId)).find((item) => item.id === id), account };
   } catch (error) {
-    const message = error instanceof KisApiError ? `${error.code}: ${error.message}` : (error as Error).message;
+    const message = brokerFailure(error, "CONNECTION_FAILED").message;
     await updateBrokerConnectionState(userId, id, "error", message.slice(0, 300));
-    await addAudit(userId, "LIVE_BROKER_CONNECTION_FAILED", id, { provider: "korea_investment", mode: input.mode, error: message.slice(0, 120) });
+    await addAudit(userId, "LIVE_BROKER_CONNECTION_FAILED", id, { provider: "korea_investment", error: message.slice(0, 120) });
+    throw error;
+  }
+}
+
+export async function connectTossInvestment(userId: string, input: { accountLabel: string; clientId: string; clientSecret: string; accountSeq?: number }) {
+  const client = { clientId: input.clientId.trim(), clientSecret: input.clientSecret.trim() };
+  if (client.clientId.length < 8 || client.clientSecret.length < 8) throw new Error("토스증권 Client ID와 Client Secret을 확인하세요.");
+  const issued = await issueTossToken(client);
+  const accounts = await getTossAccounts(issued.accessToken);
+  const account = input.accountSeq ? accounts.find((item) => item.accountSeq === input.accountSeq) : accounts.find((item) => item.accountType === "BROKERAGE") ?? accounts[0];
+  if (!account) throw new Error("토스증권에서 거래 가능한 국내주식 계좌를 찾지 못했습니다.");
+  const credentials: TossCredentials = { ...client, accountSeq: account.accountSeq, accountNo: account.accountNo };
+  validateToss(credentials);
+  const fingerprint = await credentialFingerprint(`${credentials.accountSeq}:${credentials.accountNo}:${credentials.clientId}`);
+  const accountRef = `••••-${credentials.accountNo.slice(-4)}#${fingerprint}`;
+  const existing = (await listBrokerConnections(userId)).find((item) => item.provider === "toss_investment" && item.accountRef === accountRef);
+  const id = existing?.id ?? `TOSS-${crypto.randomUUID()}`;
+  const sealed = await encryptCredential(credentials, userId, id);
+  await saveBrokerConnection({ id, userId, provider: "toss_investment", mode: "production", accountLabel: input.accountLabel.trim() || "토스증권", accountRef, credentialCiphertext: sealed, status: "pending" });
+  const tokenSealed = await encryptCredential({ accessToken: issued.accessToken }, userId, `token:${id}`);
+  await saveBrokerToken(id, tokenSealed, issued.expiresAt);
+  try {
+    const snapshot = await getLiveAccount(userId, id);
+    await updateBrokerConnectionState(userId, id, "connected", null);
+    await addAudit(userId, "LIVE_BROKER_CONNECTED", id, { provider: "toss_investment", accountRef });
+    return { connection: (await listBrokerConnections(userId)).find((item) => item.id === id), account: snapshot };
+  } catch (error) {
+    const message = brokerFailure(error, "CONNECTION_FAILED").message;
+    await updateBrokerConnectionState(userId, id, "error", message.slice(0, 300));
+    await addAudit(userId, "LIVE_BROKER_CONNECTION_FAILED", id, { provider: "toss_investment", error: message.slice(0, 120) });
     throw error;
   }
 }
@@ -90,16 +146,22 @@ export async function disconnectLiveBroker(userId: string, connectionId: string)
   return deleted;
 }
 
-export async function getLiveAccount(userId: string, connectionId: string): Promise<KisAccountSnapshot> {
+export async function getLiveAccount(userId: string, connectionId: string) {
   const bundle = await connectionBundle(userId, connectionId);
-  const account = await getKisAccount(bundle.credentials, bundle.connection.mode as KisMode, await accessToken(bundle));
+  const token = await accessToken(bundle);
+  const account = bundle.provider === "korea_investment"
+    ? await getKisAccount(bundle.credentials, bundle.connection.mode as KisMode, token)
+    : await getTossAccount(bundle.credentials, token);
   await updateBrokerConnectionState(userId, connectionId, "connected", null);
   return account;
 }
 
-export async function getLiveQuote(userId: string, connectionId: string, symbol: string, venue: "KRX" | "NXT" | "SOR" = "SOR"): Promise<KisQuote> {
+export async function getLiveQuote(userId: string, connectionId: string, symbol: string, venue: "KRX" | "NXT" | "SOR" = "SOR") {
   const bundle = await connectionBundle(userId, connectionId);
-  return getKisQuote(bundle.credentials, bundle.connection.mode as KisMode, await accessToken(bundle), symbol, venue === "KRX" ? "KRX" : venue === "NXT" ? "NXT" : "UNIFIED");
+  const token = await accessToken(bundle);
+  return bundle.provider === "korea_investment"
+    ? getKisQuote(bundle.credentials, bundle.connection.mode as KisMode, token, symbol, venue === "KRX" ? "KRX" : venue === "NXT" ? "NXT" : "UNIFIED")
+    : getTossQuote(bundle.credentials, token, symbol);
 }
 
 async function requestHash(value: unknown) {
@@ -111,6 +173,7 @@ export async function previewLiveOrder(userId: string, request: LiveOrderRequest
   validateOrder(request);
   const bundle = await connectionBundle(userId, request.connectionId);
   if (bundle.connection.mode !== "production") throw new Error("실거래 주문은 production 계좌 연결에서만 가능합니다.");
+  if (bundle.provider === "toss_investment" && (request.venue !== "SOR" || request.timeInForce !== "DAY")) throw new Error("토스증권 국내주식은 SOR·DAY 주문만 지원합니다.");
   const policy = await getLiveRiskPolicy(userId);
   if (!policy.liveEnabled) throw new Error("사용자 실거래 허용이 꺼져 있습니다.");
   if (policy.killSwitch) throw new Error("사용자 비상정지가 활성화되어 있습니다.");
@@ -126,16 +189,18 @@ export async function previewLiveOrder(userId: string, request: LiveOrderRequest
   const account = await getLiveAccount(userId, request.connectionId);
   if (request.side === "BUY" && account.deposit < estimatedNotional) throw new Error("주문가능 현금이 부족합니다.");
   if (request.side === "SELL") {
-    const position = account.positions.find((item) => item.symbol === request.symbol);
-    if (!position || position.availableQuantity < request.quantity) throw new Error("매도가능 수량이 부족합니다.");
+    const available = bundle.provider === "toss_investment"
+      ? await getTossSellableQuantity(bundle.credentials, await accessToken(bundle), request.symbol)
+      : account.positions.find((item) => item.symbol === request.symbol)?.availableQuantity ?? 0;
+    if (available < request.quantity) throw new Error("매도가능 수량이 부족합니다.");
   }
   const preview = await createLiveOrderPreview({ userId, connectionId: request.connectionId, requestHash: await requestHash(request), request, quotePrice: quote.lastPrice, estimatedNotional });
-  await addAudit(userId, "LIVE_ORDER_PREVIEWED", preview.id, { symbol: request.symbol, side: request.side, quantity: request.quantity, estimatedNotional, venue: request.venue });
+  await addAudit(userId, "LIVE_ORDER_PREVIEWED", preview.id, { provider: bundle.provider, symbol: request.symbol, side: request.side, quantity: request.quantity, estimatedNotional, venue: request.venue });
   return { ...preview, quote, confirmationText: LIVE_CONFIRMATION, globalLiveEnabled: GLOBAL_LIVE_ENABLED(), risk: { dailyNotional: usage.dailyNotional, dailyLimit: policy.maxDailyNotional } };
 }
 
 export async function submitPreviewedLiveOrder(userId: string, previewId: string, confirmationText: string) {
-  if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치가 잠겨 있습니다.");
+  if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치 또는 고정 출발 IP 준비가 잠겨 있습니다.");
   if (confirmationText.trim() !== LIVE_CONFIRMATION) throw new Error(`확인 문구 '${LIVE_CONFIRMATION}'을 정확히 입력하세요.`);
   const preview = await consumeLiveOrderPreview(userId, previewId);
   if (!preview) throw new Error("주문 미리보기가 만료되었거나 이미 사용되었습니다.");
@@ -153,68 +218,87 @@ export async function submitPreviewedLiveOrder(userId: string, previewId: string
   }
   const bundle = await connectionBundle(userId, preview.connectionId);
   try {
-    const receipt = await submitKisCashOrder(bundle.credentials, bundle.connection.mode as KisMode, await accessToken(bundle), preview.request);
+    const token = await accessToken(bundle);
+    const receipt = bundle.provider === "korea_investment"
+      ? await submitKisCashOrder(bundle.credentials, bundle.connection.mode as KisMode, token, preview.request)
+      : await submitTossCashOrder(bundle.credentials, token, { ...preview.request, clientOrderId });
     if (!receipt.brokerOrderId) throw new KisApiError("ORDER_ID_MISSING", "증권사 주문번호가 반환되지 않아 대사가 필요합니다.", 502, true);
-    const updated = await updateLiveOrderBrokerState(userId, orderId, { brokerOrderId: receipt.brokerOrderId, brokerOrgNo: receipt.brokerOrgNo, status: "SUBMITTED", brokerCode: receipt.code, brokerMessage: receipt.message });
-    await addAudit(userId, "LIVE_ORDER_SUBMITTED", orderId, { brokerOrderId: receipt.brokerOrderId, symbol: preview.request.symbol, side: preview.request.side, quantity: preview.request.quantity, venue: preview.request.venue });
+    const updated = await updateLiveOrderBrokerState(userId, orderId, { brokerOrderId: receipt.brokerOrderId, brokerOrgNo: receipt.brokerOrgNo || null, status: "SUBMITTED", brokerCode: receipt.code, brokerMessage: receipt.message });
+    await addAudit(userId, "LIVE_ORDER_SUBMITTED", orderId, { provider: bundle.provider, brokerOrderId: receipt.brokerOrderId, symbol: preview.request.symbol, side: preview.request.side, quantity: preview.request.quantity, venue: preview.request.venue });
     return updated;
   } catch (error) {
-    const brokerError = error instanceof KisApiError ? error : new KisApiError("ORDER_FAILED", (error as Error).message);
-    const status = brokerError.uncertain ? "UNKNOWN" : "REJECTED";
-    await updateLiveOrderBrokerState(userId, orderId, { status, brokerCode: brokerError.code, brokerMessage: brokerError.message });
-    await addAudit(userId, status === "UNKNOWN" ? "LIVE_ORDER_UNCERTAIN" : "LIVE_ORDER_REJECTED", orderId, { code: brokerError.code, reason: brokerError.message });
-    throw brokerError;
+    const failure = brokerFailure(error, "ORDER_FAILED");
+    const status = failure.uncertain ? "UNKNOWN" : "REJECTED";
+    await updateLiveOrderBrokerState(userId, orderId, { status, brokerCode: failure.code, brokerMessage: failure.message });
+    await addAudit(userId, status === "UNKNOWN" ? "LIVE_ORDER_UNCERTAIN" : "LIVE_ORDER_REJECTED", orderId, { code: failure.code, reason: failure.message });
+    throw failure;
   }
 }
 
 export async function cancelLiveOrder(userId: string, orderId: string) {
-  if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치가 잠겨 있습니다.");
+  if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치 또는 고정 출발 IP 준비가 잠겨 있습니다.");
   const order = await getLiveOrder(userId, orderId);
-  if (!order || !order.brokerOrderId || !order.brokerOrgNo) throw new Error("취소할 증권사 주문을 찾을 수 없습니다.");
+  if (!order?.brokerOrderId) throw new Error("취소할 증권사 주문을 찾을 수 없습니다.");
   if (!["SUBMITTED", "PARTIAL", "UNKNOWN"].includes(order.status)) throw new Error("현재 상태에서는 취소할 수 없습니다.");
   const bundle = await connectionBundle(userId, order.connectionId);
+  if (bundle.provider === "korea_investment" && !order.brokerOrgNo) throw new Error("한국투자증권 주문 원기관번호가 없어 체결대사가 필요합니다.");
   try {
-    const receipt = await cancelKisOrder(bundle.credentials, bundle.connection.mode as KisMode, await accessToken(bundle), { brokerOrderId: order.brokerOrderId, brokerOrgNo: order.brokerOrgNo, quantity: Math.max(1, order.quantity - order.executedQuantity), venue: order.venue });
+    const token = await accessToken(bundle);
+    const receipt = bundle.provider === "korea_investment"
+      ? await cancelKisOrder(bundle.credentials, bundle.connection.mode as KisMode, token, { brokerOrderId: order.brokerOrderId, brokerOrgNo: order.brokerOrgNo!, quantity: Math.max(1, order.quantity - order.executedQuantity), venue: order.venue })
+      : await cancelTossOrder(bundle.credentials, token, order.brokerOrderId);
     const updated = await updateLiveOrderBrokerState(userId, orderId, { status: "CANCEL_REQUESTED", brokerCode: receipt.code, brokerMessage: receipt.message });
-    await addAudit(userId, "LIVE_ORDER_CANCEL_REQUESTED", orderId, { brokerOrderId: order.brokerOrderId });
+    await addAudit(userId, "LIVE_ORDER_CANCEL_REQUESTED", orderId, { provider: bundle.provider, brokerOrderId: order.brokerOrderId });
     return updated;
   } catch (error) {
-    const brokerError = error instanceof KisApiError ? error : new KisApiError("CANCEL_FAILED", (error as Error).message);
-    if (brokerError.uncertain) await updateLiveOrderBrokerState(userId, orderId, { status: "UNKNOWN", brokerCode: brokerError.code, brokerMessage: brokerError.message });
-    throw brokerError;
+    const failure = brokerFailure(error, "CANCEL_FAILED");
+    if (failure.uncertain) await updateLiveOrderBrokerState(userId, orderId, { status: "UNKNOWN", brokerCode: failure.code, brokerMessage: failure.message });
+    throw failure;
   }
 }
 
-function kstDate() {
-  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replaceAll("-", "");
-}
-
-function numeric(value: unknown) {
-  const parsed = Number(String(value ?? "0").replaceAll(",", ""));
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+function kstDate() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()).replaceAll("-", ""); }
+function numeric(value: unknown) { const parsed = Number(String(value ?? "0").replaceAll(",", "")); return Number.isFinite(parsed) ? parsed : 0; }
 
 export async function reconcileLiveOrders(userId: string, connectionId: string) {
   const bundle = await connectionBundle(userId, connectionId);
-  const brokerOrders = await getKisDailyOrders(bundle.credentials, bundle.connection.mode as KisMode, await accessToken(bundle), kstDate());
+  const token = await accessToken(bundle);
   const localOrders = await listLiveOrdersForConnection(userId, connectionId);
   let updatedCount = 0;
-  for (const local of localOrders) {
-    if (!local.brokerOrderId) continue;
-    const broker = brokerOrders.find((item) => String(item.odno ?? item.ODNO ?? "") === local.brokerOrderId);
-    if (!broker) continue;
-    const executedQuantity = numeric(broker.tot_ccld_qty ?? broker.TOT_CCLD_QTY);
-    const remaining = numeric(broker.rmn_qty ?? broker.RMN_QTY);
-    const cancelled = String(broker.cncl_yn ?? broker.CNCL_YN ?? "N") === "Y";
-    const averagePrice = numeric(broker.avg_prvs ?? broker.AVG_PRVS) || (executedQuantity > 0 ? Math.round(numeric(broker.tot_ccld_amt ?? broker.TOT_CCLD_AMT) / executedQuantity) : 0);
-    const status = cancelled ? "CANCELLED" : executedQuantity >= local.quantity ? "FILLED" : executedQuantity > 0 ? "PARTIAL" : remaining === 0 && local.status === "CANCEL_REQUESTED" ? "CANCELLED" : "SUBMITTED";
-    if (status !== local.status || executedQuantity !== local.executedQuantity || (averagePrice || null) !== local.averagePrice) {
-      await updateLiveOrderBrokerState(userId, local.id, { status, executedQuantity, averagePrice: averagePrice || null, brokerCode: "RECONCILED", brokerMessage: "증권사 주문체결조회 대사 완료" });
-      updatedCount += 1;
+  let brokerRows = 0;
+  if (bundle.provider === "toss_investment") {
+    const orders = await getTossOrders(bundle.credentials, token);
+    brokerRows = orders.length;
+    for (const local of localOrders) {
+      const broker = orders.find((item) => item.orderId === local.brokerOrderId);
+      if (!broker) continue;
+      const statusMap: Record<string, string> = { PENDING: "SUBMITTED", PENDING_CANCEL: "CANCEL_REQUESTED", PARTIAL_FILLED: "PARTIAL", FILLED: "FILLED", CANCELED: "CANCELLED", REJECTED: "REJECTED", CANCEL_REJECTED: "SUBMITTED", REPLACE_REJECTED: "SUBMITTED", REPLACED: "CANCELLED" };
+      const status = statusMap[broker.status] ?? "UNKNOWN";
+      if (status !== local.status || broker.filledQuantity !== local.executedQuantity || broker.averageFilledPrice !== local.averagePrice) {
+        await updateLiveOrderBrokerState(userId, local.id, { status, executedQuantity: broker.filledQuantity, averagePrice: broker.averageFilledPrice, brokerCode: "RECONCILED", brokerMessage: "토스증권 주문체결조회 대사 완료" });
+        updatedCount += 1;
+      }
+    }
+  } else {
+    const orders = await getKisDailyOrders(bundle.credentials, bundle.connection.mode as KisMode, token, kstDate());
+    brokerRows = orders.length;
+    for (const local of localOrders) {
+      if (!local.brokerOrderId) continue;
+      const broker = orders.find((item) => String(item.odno ?? item.ODNO ?? "") === local.brokerOrderId);
+      if (!broker) continue;
+      const executedQuantity = numeric(broker.tot_ccld_qty ?? broker.TOT_CCLD_QTY);
+      const remaining = numeric(broker.rmn_qty ?? broker.RMN_QTY);
+      const cancelled = String(broker.cncl_yn ?? broker.CNCL_YN ?? "N") === "Y";
+      const averagePrice = numeric(broker.avg_prvs ?? broker.AVG_PRVS) || (executedQuantity > 0 ? Math.round(numeric(broker.tot_ccld_amt ?? broker.TOT_CCLD_AMT) / executedQuantity) : 0);
+      const status = cancelled ? "CANCELLED" : executedQuantity >= local.quantity ? "FILLED" : executedQuantity > 0 ? "PARTIAL" : remaining === 0 && local.status === "CANCEL_REQUESTED" ? "CANCELLED" : "SUBMITTED";
+      if (status !== local.status || executedQuantity !== local.executedQuantity || (averagePrice || null) !== local.averagePrice) {
+        await updateLiveOrderBrokerState(userId, local.id, { status, executedQuantity, averagePrice: averagePrice || null, brokerCode: "RECONCILED", brokerMessage: "한국투자증권 주문체결조회 대사 완료" });
+        updatedCount += 1;
+      }
     }
   }
-  await addAudit(userId, "LIVE_ORDERS_RECONCILED", connectionId, { brokerRows: brokerOrders.length, localRows: localOrders.length, updated: updatedCount });
-  return { checked: localOrders.length, brokerRows: brokerOrders.length, updated: updatedCount, orders: await listLiveOrders(userId) };
+  await addAudit(userId, "LIVE_ORDERS_RECONCILED", connectionId, { provider: bundle.provider, brokerRows, localRows: localOrders.length, updated: updatedCount });
+  return { checked: localOrders.length, brokerRows, updated: updatedCount, orders: await listLiveOrders(userId) };
 }
 
 export { listLiveOrders, LIVE_CONFIRMATION };
