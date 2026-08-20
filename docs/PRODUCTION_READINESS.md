@@ -37,6 +37,22 @@ legal trade effect.
    approval and operational staffing/runbooks.
 7. Capacity certification for forecast peak message rates, tail latency, soak, failover and recovery.
 
+## Current deployment boundary
+
+The public application intentionally reports `member_certification` and keeps
+the live-market flag disabled. Broker credentials can be entered only by an
+authenticated owner, are encrypted per user, and are never written to the
+browser, logs or repository. Account, quote, preview, submit, cancel and
+reconciliation routes also apply a per-user burst guard before calling a broker
+adapter; broker-side quotas remain authoritative.
+
+Cash-order forwarding is enabled only when all of the following are configured
+by an approved operator in the production runtime: `LIVE_TRADING_ENABLED=true`,
+`LIVE_TRADING_EGRESS_READY=true`, a 32-character-or-longer
+`CREDENTIAL_ENCRYPTION_KEY`, registered fixed egress IPs/certificates at each
+broker, and the applicable participant/legal approvals. Until then, the UI
+shows the exact blocking reasons and the order-forwarding gate remains closed.
+
 ## Member onboarding inputs
 
 - Member ID/CompID and enabled sessions

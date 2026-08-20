@@ -332,7 +332,10 @@ h2 { margin: 7px 0 0; font-size: 15px; letter-spacing: -.03em; }
 .live-state.blocked { color: var(--amber); border-color: rgba(232,174,88,.3); background: rgba(232,174,88,.07); }
 .live-guardrail { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; padding: 10px 12px; border: 1px solid rgba(251,114,126,.2); border-radius: 8px; background: rgba(251,114,126,.055); }
 .live-guardrail strong { color: var(--red); font-size: 10px; white-space: nowrap; }
+.live-guardrail > div { display: grid; gap: 4px; min-width: 0; }
 .live-guardrail span { color: #aeb8c1; font-size: 9px; line-height: 1.5; }
+.live-blockers { color: var(--amber); font-size: 8px; line-height: 1.45; }
+.live-blockers.ready { color: var(--green); }
 .live-message { display: flex; align-items: center; gap: 8px; min-height: 32px; margin-bottom: 12px; padding: 8px 11px; border-radius: 7px; background: rgba(53,203,139,.055); color: #abb7be; font-size: 9px; }
 .pulse-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 0 rgba(88,212,209,.5); animation: livePulse 1.2s infinite; }
 @keyframes livePulse { 70% { box-shadow: 0 0 0 7px rgba(88,212,209,0); } 100% { box-shadow: 0 0 0 0 rgba(88,212,209,0); } }

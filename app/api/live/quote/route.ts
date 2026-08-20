@@ -1,11 +1,16 @@
 import { getChatGPTUser } from "../../../chatgpt-auth";
 import { getLiveQuote } from "../../../../engine/liveTradingService";
+import { ensurePaperUser } from "../../../../db/trading";
+import { checkLiveRequestRateLimit } from "../../../../engine/liveRateLimit";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  const limit = checkLiveRequestRateLimit(user.userId, "quote");
+  if (!limit.allowed) return Response.json({ error: "시세조회 요청이 너무 많습니다.", retryAfterSeconds: limit.retryAfterSeconds }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": String(limit.retryAfterSeconds) } });
+  await ensurePaperUser(user);
   const search = new URL(request.url).searchParams;
   const connectionId = search.get("connectionId")?.trim() ?? "";
   const symbol = search.get("symbol")?.trim() ?? "";
