@@ -48,7 +48,8 @@ adapter; broker-side quotas remain authoritative.
 
 Cash-order forwarding is enabled only when all of the following are configured
 by an approved operator in the production runtime: `LIVE_TRADING_ENABLED=true`,
-`LIVE_TRADING_EGRESS_READY=true`, a 32-character-or-longer
+`LIVE_TRADING_EGRESS_READY=true`, `TRADING_ENVIRONMENT=production`,
+`LIVE_MARKET_ENABLED=true`, a 32-character-or-longer
 `CREDENTIAL_ENCRYPTION_KEY`, registered fixed egress IPs/certificates at each
 broker, and the applicable participant/legal approvals. Until then, the UI
 shows the exact blocking reasons and the order-forwarding gate remains closed.
