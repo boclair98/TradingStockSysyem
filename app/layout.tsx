@@ -1,14 +1,22 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import "./globals.css";
 
-export const metadata: Metadata = {
-  title: "TradingStockSysyem | Matching Core",
-  description: "TradingStockSysyem 개인용 매매체결 운영 콘솔. 가격·시간 우선 체결 규칙과 주문원장을 검증하며 외부 거래소 API는 아직 연결되지 않았습니다.",
-  icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
-  },
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const requestHeaders = await headers();
+  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
+  const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
+  const origin = host ? `${protocol}://${host}` : "https://tradingstocksysyem.coders.kr";
+  const title = "TradingStockSysyem | 자동 매매체결 시스템";
+  const description = "전략 주문 실행, 결정론적 매칭, 사전 위험통제, 내구성 저널과 복구를 갖춘 자동 매매체결 시스템.";
+  return {
+    title,
+    description,
+    icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
+    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og.png`, width: 1733, height: 909, alt: "TradingStockSysyem automated trade execution system" }] },
+    twitter: { card: "summary_large_image", title, description, images: [`${origin}/og.png`] },
+  };
+}
 
 export default function RootLayout({
   children,
@@ -21,3 +29,4 @@ export default function RootLayout({
     </html>
   );
 }
+

@@ -1,0 +1,69 @@
+# Production readiness boundary
+
+TradingStockSysyem is an automated trade-execution and matching certification environment. It
+implements a controlled order path: order entry, validation and sequencing, pre-trade risk,
+deterministic matching, market-data publication, execution reporting and drop copy.
+
+It is not an authorized exchange and must not be presented as a live securities market. The
+public deployment is for conformance testing and demonstrations; it has no clearing, settlement or
+legal trade effect.
+
+## Implemented
+
+- Price/time priority CLOB matching with IOC, FOK, midpoint, stop-limit and call auction support
+- Independent Java 21 venue-core baseline with fixed integer prices/quantities, monotonic command sequencing, CRC32C/fsync WAL and deterministic replay digest
+- Member/session scoped order-entry gateway with HMAC authentication and strict inbound sequence
+- Duplicate client-order detection, clock-skew validation and distributed message-rate limiting
+- Deterministic market sequence, execution reports, market-data snapshots and drop-copy journal
+- Korean tick sizes, daily price bands, instrument admission and venue-wide halt modes
+- Pre-trade quantity/notional/open-order limits and self-trade prevention
+- Durable order/execution/audit journals, restart recovery and SHA-256 audit-chain verification
+- Process serialization plus PostgreSQL advisory transaction fencing for multi-instance mutations
+- Operator states `OPEN`, `CANCEL_ONLY` and `FULL_STOP`, health/readiness and live operations view
+
+## Required before regulated production
+
+1. Participant-approved protocol specifications, conformance scenarios, CompIDs, PKI/mTLS
+   certificates, IP allowlists and dedicated connectivity for each supported venue or broker.
+2. Licensed reference/market-data feeds for instrument master, corporate actions, trading status,
+   price bands and the applicable market state.
+3. Clearing and settlement interfaces and operating agreements with the relevant clearing,
+   depository and participant institutions, including reconciliation and fails handling.
+4. Independent active/standby sequencers, consensus/fencing, deterministic replay, tested regional
+   disaster recovery and formally approved RTO/RPO.
+5. PTP-class time synchronization, immutable external audit retention, HSM-backed keys, SIEM,
+   DDoS/WAF controls, penetration testing and access recertification.
+6. Market surveillance, short-sale and price-manipulation controls, regulatory reporting, legal
+   approval and operational staffing/runbooks.
+7. Capacity certification for forecast peak message rates, tail latency, soak, failover and recovery.
+
+## Current deployment boundary
+
+The public application intentionally reports `member_certification` and keeps
+the live-market flag disabled. Broker credentials can be entered only by an
+authenticated owner, are encrypted per user, and are never written to the
+browser, logs or repository. Account, quote, preview, submit, cancel and
+reconciliation routes also apply a per-user burst guard before calling a broker
+adapter; broker-side quotas remain authoritative.
+
+Cash-order forwarding is enabled only when all of the following are configured
+by an approved operator in the production runtime: `LIVE_TRADING_ENABLED=true`,
+`LIVE_TRADING_EGRESS_READY=true`, `TRADING_ENVIRONMENT=production`,
+`LIVE_MARKET_ENABLED=true`, a 32-character-or-longer
+`CREDENTIAL_ENCRYPTION_KEY`, registered fixed egress IPs/certificates at each
+broker, and the applicable participant/legal approvals. Until then, the UI
+shows the exact blocking reasons and the order-forwarding gate remains closed.
+
+## Member onboarding inputs
+
+- Member ID/CompID and enabled sessions
+- Certification and production endpoint allocation
+- Public certificates and certificate chain (private keys remain with their owner)
+- Source IPs and network/circuit details
+- Protocol version, order types, throttles and kill-switch contacts
+- Drop-copy and market-data session requirements
+
+Retail broker credentials such as Toss Securities or Korea Investment app keys are intentionally
+outside the ATS core. A broker member connects its own OMS/gateway to the venue interface; each
+investor does not upload a personal brokerage credential to the exchange.
+

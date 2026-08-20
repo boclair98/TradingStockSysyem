@@ -37,6 +37,13 @@ yarn-error.log*
 # typescript
 next-env.d.ts
 /dist/
+*.tsbuildinfo
+.coders/
 /.wrangler/
 /outputs/
 /work/
+/venue-core-java/out/
+.env.local
+.env.*.local
+KIS_API_비밀설정.txt
+ATS_기관연동_ENV_설정_메모장.txt
