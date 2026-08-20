@@ -7,7 +7,7 @@ type Connection = { id: string; provider: string; mode: "sandbox" | "production"
 type Account = { deposit: number; totalEvaluation: number; netAsset: number; purchaseAmount: number; profitLoss: number; receivedAt: string; positions: Array<{ symbol: string; name: string; quantity: number; availableQuantity: number; averagePrice: number; currentPrice: number; evaluationAmount: number; profitLoss: number }> };
 type Policy = { liveEnabled: boolean; automationEnabled: boolean; killSwitch: boolean; maxOrderQuantity: number; maxOrderNotional: number; maxDailyNotional: number; maxOpenOrders: number; allowedSymbols: string[]; acknowledgedAt: string | null; updatedAt: string };
 type Usage = { dailyNotional: number; openOrders: number };
-type Readiness = { ready: boolean; service: { globalLiveEnabled: boolean; egressReady: boolean; providers: string[]; executionReconciliation: string }; productionConnection: Connection | null; policy: Policy; usage: Usage };
+type Readiness = { ready: boolean; service: { globalLiveEnabled: boolean; liveTradingSwitch: boolean; egressReady: boolean; encryptionKeyConfigured: boolean; blockers: string[]; environment: string; liveMarket: boolean; providers: string[]; executionReconciliation: string }; productionConnection: Connection | null; policy: Policy; usage: Usage };
 type LiveOrder = { id: string; connectionId: string; clientOrderId: string; brokerOrderId: string | null; symbol: string; side: "BUY" | "SELL"; orderType: "LIMIT" | "MARKET"; timeInForce: "DAY" | "IOC" | "FOK"; venue: "KRX" | "NXT" | "SOR"; price: number | null; quantity: number; executedQuantity: number; averagePrice: number | null; status: string; brokerMessage: string | null; submittedAt: string; updatedAt: string };
 type Preview = { id: string; request: Record<string, unknown>; quotePrice: number; estimatedNotional: number; expiresAt: string; confirmationText: string; globalLiveEnabled: boolean; quote: { lastPrice: number; bestBid: number | null; bestAsk: number | null; changeRate: number | null; receivedAt: string } };
 
@@ -67,7 +67,7 @@ export default function LiveTradingPanel({ authenticated }: { authenticated: boo
       setOrders(orderPayload.orders);
       setReadiness(readinessPayload);
       setConnectionId((current) => current || readinessPayload.productionConnection?.id || brokerPayload.connections.find((item) => item.status === "connected")?.id || "");
-      if (!quiet) setMessage(readinessPayload.ready ? "실전 주문 게이트 준비 완료" : brokerPayload.connections.length ? "실전 주문 안전장치와 고정 출발 IP를 확인하세요" : "토스·한국투자·키움 중 본인 실계좌를 먼저 연결하세요");
+      if (!quiet) setMessage(readinessPayload.ready ? "실전 주문 게이트 준비 완료" : brokerPayload.connections.length ? `실전 주문 잠금 · ${readinessPayload.service.blockers[0] ?? "사용자 계좌·위험정책 확인 필요"}` : "토스·한국투자·키움 중 본인 실계좌를 먼저 연결하세요");
     } catch (error) {
       if (!quiet) setMessage(error instanceof Error ? error.message : "실거래 상태 확인 실패");
     }
@@ -166,7 +166,7 @@ export default function LiveTradingPanel({ authenticated }: { authenticated: boo
         <div className={`live-state ${readiness?.ready ? "ready" : "blocked"}`}><span className={`tiny-dot ${readiness?.ready ? "green" : "amber"}`} />{readiness?.ready ? "LIVE READY" : "SAFETY LOCKED"}</div>
       </div>
 
-      <div className="live-guardrail"><strong>실제 현금 주문</strong><span>서버 허용 + 고정 출발 IP + 사용자 위험동의 + 60초 주문확인 네 단계가 모두 통과해야 전송됩니다. 현재 게이트: {readiness?.service.egressReady ? "출발 IP 준비" : "출발 IP 잠금"}</span></div>
+      <div className="live-guardrail"><strong>실제 현금 주문</strong><div><span>서버 허용 + 고정 출발 IP + 사용자 위험동의 + 60초 주문확인 네 단계가 모두 통과해야 전송됩니다. 현재 환경: {readiness?.service.environment ?? "확인 중"} · {readiness?.service.liveMarket ? "실시간 시장" : "인증·검증 모드"}</span>{readiness?.service.blockers.length ? <small className="live-blockers">잠금 사유: {readiness.service.blockers.join(" · ")}</small> : <small className="live-blockers ready">모든 서버 게이트 통과</small>}</div></div>
       <div className="live-message"><span className={busy ? "pulse-dot" : "tiny-dot green"} />{message}</div>
 
       <div className="live-grid">

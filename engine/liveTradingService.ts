@@ -93,9 +93,22 @@ function brokerFailure(error: unknown, fallback: string) {
 }
 
 export function getLiveServiceReadiness() {
+  const encryptionKeyConfigured = (process.env.CREDENTIAL_ENCRYPTION_KEY?.trim().length ?? 0) >= 32;
+  const liveTradingSwitch = process.env.LIVE_TRADING_ENABLED === "true";
+  const egressReady = EGRESS_READY();
+  const blockers = [
+    ...(liveTradingSwitch ? [] : ["LIVE_TRADING_ENABLED is not enabled"]),
+    ...(egressReady ? [] : ["LIVE_TRADING_EGRESS_READY is not enabled"]),
+    ...(encryptionKeyConfigured ? [] : ["CREDENTIAL_ENCRYPTION_KEY is not configured"]),
+  ];
   return {
     globalLiveEnabled: GLOBAL_LIVE_ENABLED(),
-    egressReady: EGRESS_READY(),
+    liveTradingSwitch,
+    egressReady,
+    encryptionKeyConfigured,
+    blockers,
+    environment: "member_certification",
+    liveMarket: false,
     providers: ["toss_investment", "korea_investment", "kiwoom"],
     providerCapabilities: {
       toss_investment: { production: true, sandbox: false, venues: ["SOR"], timeInForce: ["DAY"] },
