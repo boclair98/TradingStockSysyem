@@ -7,13 +7,13 @@ export async function generateMetadata(): Promise<Metadata> {
   const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
   const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
   const origin = host ? `${protocol}://${host}` : "https://tradingstocksysyem.coders.kr";
-  const title = "TradingStockSysyem | ATS 매매체결 코어";
-  const description = "결정론적 가격·시간 우선 매칭, 회원사 주문 게이트웨이, 사전위험통제, 내구성 저널과 복구를 갖춘 ATS 기술실사·적합성 기준선.";
+  const title = "TradingStockSysyem | 자동 매매체결 시스템";
+  const description = "전략 주문 실행, 결정론적 매칭, 사전 위험통제, 내구성 저널과 복구를 갖춘 자동 매매체결 시스템.";
   return {
     title,
     description,
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og.png`, width: 1733, height: 909, alt: "TradingStockSysyem secure ATS core and multi-broker live routing" }] },
+    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og.png`, width: 1733, height: 909, alt: "TradingStockSysyem automated trade execution system" }] },
     twitter: { card: "summary_large_image", title, description, images: [`${origin}/og.png`] },
   };
 }
@@ -29,3 +29,4 @@ export default function RootLayout({
     </html>
   );
 }
+
