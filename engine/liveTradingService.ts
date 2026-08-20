@@ -7,7 +7,9 @@ import { cancelTossOrder, getTossAccount, getTossAccounts, getTossOrders, getTos
 
 const LIVE_CONFIRMATION = "실거래 주문 실행";
 const EGRESS_READY = () => process.env.LIVE_TRADING_EGRESS_READY === "true";
-const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true" && EGRESS_READY();
+const TRADING_ENVIRONMENT = () => process.env.TRADING_ENVIRONMENT?.trim() || "member_certification";
+const LIVE_MARKET_ENABLED = () => process.env.LIVE_MARKET_ENABLED === "true" && TRADING_ENVIRONMENT() === "production";
+const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true" && EGRESS_READY() && LIVE_MARKET_ENABLED();
 
 type StoredConnection = NonNullable<Awaited<ReturnType<typeof getBrokerConnectionSecret>>>;
 type KisBundle = { provider: "korea_investment"; connection: StoredConnection; credentials: KisCredentials };
@@ -96,9 +98,13 @@ export function getLiveServiceReadiness() {
   const encryptionKeyConfigured = (process.env.CREDENTIAL_ENCRYPTION_KEY?.trim().length ?? 0) >= 32;
   const liveTradingSwitch = process.env.LIVE_TRADING_ENABLED === "true";
   const egressReady = EGRESS_READY();
+  const environment = TRADING_ENVIRONMENT();
+  const liveMarket = LIVE_MARKET_ENABLED();
   const blockers = [
     ...(liveTradingSwitch ? [] : ["LIVE_TRADING_ENABLED is not enabled"]),
     ...(egressReady ? [] : ["LIVE_TRADING_EGRESS_READY is not enabled"]),
+    ...(environment === "production" ? [] : ["TRADING_ENVIRONMENT is not production"]),
+    ...(liveMarket ? [] : ["LIVE_MARKET_ENABLED is not enabled"]),
     ...(encryptionKeyConfigured ? [] : ["CREDENTIAL_ENCRYPTION_KEY is not configured"]),
   ];
   return {
@@ -107,8 +113,8 @@ export function getLiveServiceReadiness() {
     egressReady,
     encryptionKeyConfigured,
     blockers,
-    environment: "member_certification",
-    liveMarket: false,
+    environment,
+    liveMarket,
     providers: ["toss_investment", "korea_investment", "kiwoom"],
     providerCapabilities: {
       toss_investment: { production: true, sandbox: false, venues: ["SOR"], timeInForce: ["DAY"] },

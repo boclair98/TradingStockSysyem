@@ -1,18 +1,20 @@
 import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
 import { getGatewayOperations, getPersistenceHealth } from "../../../db/trading";
+import { getLiveServiceReadiness } from "../../../engine/liveTradingService";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const [persistence, runtime, gateway] = await Promise.all([getPersistenceHealth(), getHydratedPaperRuntime(), getGatewayOperations()]);
+  const liveService = getLiveServiceReadiness();
   const ready = persistence.ok;
   return Response.json({
     ok: ready,
     service: "TradingStockSysyem",
     targetVenue: "NEXTRADE",
     integrationModel: "institutional_member_gateway",
-    environment: "member_certification",
-    liveMarket: false,
+    environment: liveService.environment,
+    liveMarket: liveService.liveMarket,
     gateway,
     persistence,
     engine: {
