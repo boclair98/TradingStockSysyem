@@ -1,8 +1,8 @@
 # Production readiness boundary
 
-TradingStockSysyem is an institutional ATS certification environment. It implements the same
-logical boundary as an exchange venue: member order entry, validation and sequencing, pre-trade
-risk, deterministic matching, market-data publication, execution reporting and drop copy.
+TradingStockSysyem is an automated trade-execution and matching certification environment. It
+implements a controlled order path: order entry, validation and sequencing, pre-trade risk,
+deterministic matching, market-data publication, execution reporting and drop copy.
 
 It is not an authorized exchange and must not be presented as a live securities market. The
 public deployment is for conformance testing and demonstrations; it has no clearing, settlement or
@@ -23,10 +23,10 @@ legal trade effect.
 
 ## Required before regulated production
 
-1. NEXTRADE/participant-approved protocol specifications, conformance scenarios, CompIDs, PKI/mTLS
-   certificates, IP allowlists and dedicated connectivity.
+1. Participant-approved protocol specifications, conformance scenarios, CompIDs, PKI/mTLS
+   certificates, IP allowlists and dedicated connectivity for each supported venue or broker.
 2. Licensed reference/market-data feeds for instrument master, corporate actions, trading status,
-   price bands and KRX/NEXTRADE market state.
+   price bands and the applicable market state.
 3. Clearing and settlement interfaces and operating agreements with the relevant clearing,
    depository and participant institutions, including reconciliation and fails handling.
 4. Independent active/standby sequencers, consensus/fencing, deterministic replay, tested regional

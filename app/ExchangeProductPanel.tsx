@@ -14,9 +14,9 @@ export default function ExchangeProductPanel() {
     <section className="exchange-product" id="exchange-core">
       <div className="exchange-product-head">
         <div>
-          <span className="section-kicker">ATS PRODUCT BASELINE · INSTITUTIONAL EVALUATION</span>
-          <h1>독립 거래소 매매체결 코어</h1>
-          <p>증권사 개인계좌 API와 분리된 회원사 주문시장 구조입니다. API가 없어도 매칭·순번·위험통제·저널 복구를 결정론적으로 검증합니다.</p>
+          <span className="section-kicker">AUTOMATED EXECUTION · SYSTEM EVALUATION</span>
+          <h1>자동 매매체결 코어</h1>
+          <p>전략 주문을 접수하고 순번·위험통제·매칭·체결보고를 일관되게 처리하는 실행 코어입니다. 브로커 연결부와 체결 코어를 분리해 검증합니다.</p>
         </div>
         <span className="evaluation-badge"><i /> ENGINEERING EVALUATION BUILD</span>
       </div>
@@ -34,7 +34,7 @@ export default function ExchangeProductPanel() {
         <div><span>CORE TESTS</span><strong>8 / 8</strong><small>price-time · risk · recovery</small></div>
       </div>
 
-      <div className="exchange-flow" aria-label="ATS 처리 흐름">
+      <div className="exchange-flow" aria-label="자동 매매체결 처리 흐름">
         {flow.map((item, index) => <div key={item}><span>{String(index + 1).padStart(2, "0")}</span><strong>{item}</strong>{index < flow.length - 1 ? <b>›</b> : null}</div>)}
       </div>
 
