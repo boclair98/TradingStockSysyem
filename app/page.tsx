@@ -35,6 +35,34 @@ type SessionView = {
   signOutPath: string;
 };
 
+type WorkspaceView = "trade" | "lab" | "operations" | "engineering";
+type PendingAction =
+  | { kind: "cancel-all"; count: number }
+  | { kind: "venue-stop"; phase: MarketPhase; haltMode: VenueControlView["haltMode"] };
+
+const WORKSPACE_META: Record<WorkspaceView, { eyebrow: string; title: string; description: string }> = {
+  trade: {
+    eyebrow: "LIVE BROKER WORKSPACE",
+    title: "실거래 주문",
+    description: "내 증권계좌, 위험 한도, 주문 미리보기와 체결 대사를 한 화면에서 관리합니다.",
+  },
+  lab: {
+    eyebrow: "DETERMINISTIC MATCHING LAB",
+    title: "매칭엔진 검증",
+    description: "실계좌와 완전히 분리된 환경에서 주문 우선순위, 체결 규칙과 복구 동작을 검증합니다.",
+  },
+  operations: {
+    eyebrow: "OPERATIONS CONTROL",
+    title: "운영 모니터",
+    description: "영속 저장소, 시장 시퀀스, 이벤트 스트림과 회원사 게이트웨이 상태를 확인합니다.",
+  },
+  engineering: {
+    eyebrow: "ENGINEERING EVALUATION",
+    title: "시스템 아키텍처",
+    description: "현재 구현 범위, 성능 기준선과 운영시장 전환에 필요한 기술 격차를 투명하게 공개합니다.",
+  },
+};
+
 export default function Home() {
   const [selectedSymbol, setSelectedSymbol] = useState(DEFAULT_SYMBOL);
   const [engine] = useState(() => new MatchingEngine("CANCEL_TAKER", INSTRUMENTS));
@@ -61,6 +89,9 @@ export default function Home() {
   const [session, setSession] = useState<SessionView | null>(null);
   const [signInRequired, setSignInRequired] = useState(false);
   const [signInPath, setSignInPath] = useState("/signin-with-chatgpt?return_to=%2F");
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("trade");
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const authenticated = session !== null;
 
   useEffect(() => {
@@ -144,6 +175,7 @@ export default function Home() {
           const payload = await venueResponse.json();
           setVenueControl(payload.control ?? null);
         }
+        setLastSyncedAt(Date.now());
       } catch {
         if (active) setMessage("공유 시장 연결을 다시 확인하는 중");
       }
@@ -222,13 +254,12 @@ export default function Home() {
     setMessage(`${orderId} 취소 완료`);
   }
 
-  async function cancelAllOrders() {
+  async function performCancelAllOrders() {
     const openOrders = orders.filter((order) => order.status === "OPEN" || order.status === "PARTIAL");
     if (!openOrders.length) {
       setMessage("취소할 미체결 주문이 없습니다");
       return;
     }
-    if (!window.confirm(`${openOrders.length}건의 미체결 주문을 모두 취소할까요?`)) return;
     const response = await fetch("/api/orders", { method: "DELETE" });
     const result = await response.json();
     if (!response.ok) {
@@ -262,13 +293,13 @@ export default function Home() {
     window.location.reload();
   }
 
-  function jumpTo(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  function switchWorkspace(next: WorkspaceView) {
+    setWorkspaceView(next);
+    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  async function changeVenueControl(phase: MarketPhase, haltMode: VenueControlView["haltMode"]) {
+  async function applyVenueControl(phase: MarketPhase, haltMode: VenueControlView["haltMode"]) {
     if (!venueControl || session?.user.role !== "operator") return;
-    if (haltMode === "FULL_STOP" && !window.confirm("전면정지 중에는 신규·정정·취소 주문이 모두 차단됩니다. 실행할까요?")) return;
     const response = await fetch("/api/operations/venue", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -285,34 +316,61 @@ export default function Home() {
     setMessage(`시장통제 반영 · ${payload.control.phase} / ${payload.control.haltMode}`);
   }
 
+  function changeVenueControl(phase: MarketPhase, haltMode: VenueControlView["haltMode"]) {
+    if (haltMode === "FULL_STOP") {
+      setPendingAction({ kind: "venue-stop", phase, haltMode });
+      return;
+    }
+    void applyVenueControl(phase, haltMode);
+  }
+
+  async function confirmPendingAction() {
+    const action = pendingAction;
+    setPendingAction(null);
+    if (!action) return;
+    if (action.kind === "cancel-all") await performCancelAllOrders();
+    else await applyVenueControl(action.phase, action.haltMode);
+  }
+
   return (
     <main className="terminal-shell">
       <aside className="side-rail">
-        <div className="brand-mark">S<span>TS</span></div>
-        <nav className="rail-nav" aria-label="주요 메뉴">
-          <button className="rail-item active" aria-label="Exchange Core" onClick={() => jumpTo("exchange-core")}><span className="rail-icon">◆</span><span>Core</span></button>
-          <button className="rail-item" aria-label="Live Trading" onClick={() => jumpTo("live-trading")}><span className="rail-icon">↗</span><span>Broker</span></button>
-          <button className="rail-item" aria-label="Matching Lab" onClick={() => jumpTo("matching-console")}><span className="rail-icon">⌁</span><span>Lab</span></button>
-          <button className="rail-item" aria-label="Orders" onClick={() => jumpTo("order-journal")}><span className="rail-icon">◫</span><span>Orders</span></button>
-          <button className="rail-item" aria-label="Risk" onClick={() => jumpTo("risk-controls")}><span className="rail-icon">⌁</span><span>Risk</span></button>
-          <button className="rail-item" aria-label="Monitor" onClick={() => jumpTo("system-monitor")}><span className="rail-icon">◌</span><span>Monitor</span></button>
-          <button className="rail-item" aria-label="Gateway" onClick={() => jumpTo("institutional-hub")}><span className="rail-icon">↯</span><span>Gateway</span></button>
+        <div className="brand-mark" aria-label="Trading Stock System">T<span>SS</span></div>
+        <nav className="rail-nav" aria-label="작업공간">
+          <button className={`rail-item ${workspaceView === "trade" ? "active" : ""}`} aria-current={workspaceView === "trade" ? "page" : undefined} onClick={() => switchWorkspace("trade")}><span className="rail-icon">↗</span><span>실거래</span></button>
+          <button className={`rail-item ${workspaceView === "lab" ? "active" : ""}`} aria-current={workspaceView === "lab" ? "page" : undefined} onClick={() => switchWorkspace("lab")}><span className="rail-icon">⌁</span><span>매칭 랩</span></button>
+          <button className={`rail-item ${workspaceView === "operations" ? "active" : ""}`} aria-current={workspaceView === "operations" ? "page" : undefined} onClick={() => switchWorkspace("operations")}><span className="rail-icon">◌</span><span>운영</span></button>
+          <button className={`rail-item ${workspaceView === "engineering" ? "active" : ""}`} aria-current={workspaceView === "engineering" ? "page" : undefined} onClick={() => switchWorkspace("engineering")}><span className="rail-icon">◆</span><span>시스템</span></button>
         </nav>
-        <div className="rail-bottom"><button className="rail-item" aria-label="설정"><span className="rail-icon">⚙</span><span>설정</span></button><div className="user-avatar">{session ? session.user.participantId.slice(-2) : "--"}</div></div>
+        <div className="rail-bottom"><div className="user-avatar" title={session?.user.displayName ?? "로그인 필요"}>{session ? session.user.participantId.slice(-2) : "--"}</div></div>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div className="crumb"><span className="eyebrow">TRADINGSTOCKSYSYEM / AUTOMATED EXECUTION</span><span className="crumb-divider">/</span><strong>TradingStockSysyem</strong></div>
-          <div className="top-actions"><div className="market-state"><span className="tiny-dot amber" /> EXECUTION EVALUATION · LIVE GATE LOCKED</div><div className="header-chip"><span className="tiny-dot green" /> {session ? session.user.displayName : "운영자 로그인 필요"}</div></div>
+          <div className="crumb"><span className="eyebrow">TRADING STOCK SYSTEM</span><span className="crumb-divider">/</span><strong>{WORKSPACE_META[workspaceView].title}</strong></div>
+          <div className="top-actions">
+            <div className="market-state"><span className={`tiny-dot ${readiness?.ok ? "green" : "amber"}`} /> {readiness?.ok ? "CORE READY" : "CORE CHECKING"}</div>
+            <div className="market-state"><span className={`tiny-dot ${streamConnected ? "green" : "amber"}`} /> {streamConnected ? "EVENT STREAM" : "RECONNECTING"}</div>
+            <div className="header-chip">{lastSyncedAt ? `동기화 ${new Date(lastSyncedAt).toLocaleTimeString("ko-KR", { hour12: false })}` : "동기화 대기"}</div>
+          </div>
         </header>
 
         <div className="content" id="matching-console">
           {signInRequired ? <section className="auth-banner"><div><strong>실계좌 주문은 로그인한 사용자만 사용할 수 있습니다</strong><span>사용자별 증권사 키와 계좌는 암호화·분리 저장되며 다른 사용자에게 공개되지 않습니다.</span></div><a href={signInPath}>사용자 로그인</a></section> : session ? <section className="account-strip"><div><span>사용자</span><strong>{session.user.participantId}</strong></div><div><span>권한</span><strong>{session.user.role.toUpperCase()}</strong></div><div><span>Live Broker</span><strong>USER VAULT</strong></div><div><span>Engine Lab</span><strong>seq {formatNumber(book.sequence)}</strong></div><a href={session.signOutPath}>로그아웃</a></section> : null}
 
-          <ExchangeProductPanel />
-          <LiveTradingPanel authenticated={authenticated} />
+          <section className={`workspace-hero view-${workspaceView}`}>
+            <div><span className="section-kicker">{WORKSPACE_META[workspaceView].eyebrow}</span><h1>{WORKSPACE_META[workspaceView].title}</h1><p>{WORKSPACE_META[workspaceView].description}</p></div>
+            <div className="workspace-hero-status"><span><i className={authenticated ? "ready" : "locked"} />{authenticated ? session.user.displayName : "로그인 필요"}</span><span><i className={readiness?.ok ? "ready" : "checking"} />{readiness?.persistence.ok ? `${readiness.persistence.provider.toUpperCase()} ${readiness.persistence.latencyMs}ms` : "저장소 확인 중"}</span></div>
+          </section>
 
+          <nav className="workspace-tabs" aria-label="작업공간 선택">
+            {(["trade", "lab", "operations", "engineering"] as WorkspaceView[]).map((view) => <button key={view} type="button" className={workspaceView === view ? "active" : ""} aria-pressed={workspaceView === view} onClick={() => switchWorkspace(view)}>{WORKSPACE_META[view].title}</button>)}
+          </nav>
+
+          {workspaceView === "engineering" ? <ExchangeProductPanel /> : null}
+          {workspaceView === "trade" ? <LiveTradingPanel authenticated={authenticated} /> : null}
+
+          {workspaceView === "lab" ? <>
           <div className="instrument-bar">
             <div className="instrument-title"><div className="ticker-icon">{selectedInstrument.mark}</div><div><div className="instrument-name">{selectedInstrument.displayName} <span className="ticker">{selectedSymbol} · {selectedInstrument.venue}</span></div><div className="instrument-sub">중앙 호가장 · 시장 시퀀스 · 체결 보고</div></div></div>
             <div className="instrument-selector"><label htmlFor="instrument-select">엔진 랩 종목</label><select id="instrument-select" value={selectedSymbol} onChange={(event) => selectInstrument(event.target.value)}>{INSTRUMENTS.map((instrument) => <option key={instrument.symbol} value={instrument.symbol}>{instrument.displayName} · {instrument.symbol}</option>)}</select><span>내부 매칭 검증용 · {INSTRUMENTS.length}종목</span></div>
@@ -323,17 +381,19 @@ export default function Home() {
           <section className="feed-warning"><span className="warning-icon">L</span><div><strong>아래 영역은 자동 매매체결 검증 랩입니다.</strong><span>실제 현금 주문은 위 ‘실거래 주문·체결 콘솔’에서만 증권사로 전송됩니다. 랩 주문은 실제 계좌에 영향을 주지 않습니다.</span></div></section>
 
           <section className="engine-profile" aria-label="엔진 프로파일"><div><span>MATCHING POLICY</span><strong>DETERMINISTIC PRICE / TIME</strong></div><div><span>ORDER GATEWAY</span><strong>MEMBER SESSION · HMAC · SEQUENCE</strong></div><div><span>RECOVERY</span><strong>WAL · SNAPSHOT · DISTRIBUTED LEADER LOCK</strong></div><div className="profile-lock"><span className={`tiny-dot ${venueControl?.haltMode === "OPEN" ? "green" : "amber"}`} /> {venueControl?.haltMode === "FULL_STOP" ? "VENUE FULL STOP" : venueControl?.haltMode === "CANCEL_ONLY" ? "CANCEL ONLY" : "ORDER GATE OPEN"}</div></section>
+          </> : null}
 
-          <section className="operations-strip" id="system-monitor" aria-label="운영 상태">
+          {workspaceView === "operations" ? <section className="operations-strip" id="system-monitor" aria-label="운영 상태">
             <div><span>서비스 상태</span><strong className={readiness?.ok ? "positive" : "sell-color"}>{readiness?.ok ? "정상" : "확인 중"}</strong><small>readiness gate</small></div>
             <div><span>주문 저널</span><strong>{readiness?.persistence.ok ? readiness.persistence.provider.toUpperCase() : "—"}</strong><small>{readiness?.persistence.ok ? `${readiness.persistence.latencyMs}ms 응답` : "영속 저장소 확인"}</small></div>
             <div><span>복구 미체결</span><strong>{formatNumber(readiness?.engine.recoveredOrders ?? 0)}건</strong><small>원본 우선순위 유지</small></div>
             <div><span>매칭 리더</span><strong>{readiness?.safeguards.distributedLeaderLock ? "분산 직렬화" : readiness?.safeguards.mutationSerialization ? "단일 직렬화" : "—"}</strong><small>결정론적 처리 경계</small></div>
             <div><span>실시간 이벤트</span><strong className={streamConnected ? "positive" : "muted"}>{streamConnected ? "연결됨" : "재연결 중"}</strong><small>SSE · 자동 복구</small></div>
-          </section>
+          </section> : null}
 
-          {session?.user.role === "operator" && venueControl ? <section className="operator-control" aria-label="운영자 시장 통제"><div><span className="section-kicker">OPERATOR CONTROL</span><strong>{venueControl.phase} · {venueControl.haltMode}</strong><small>version {venueControl.version} · 모든 변경은 해시 감사기록에 남습니다.</small></div><div className="operator-actions"><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "PRE_MARKET" ? "active" : ""} onClick={() => changeVenueControl("PRE_MARKET", "OPEN")}>PRE</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "CONTINUOUS" ? "active" : ""} onClick={() => changeVenueControl("CONTINUOUS", "OPEN")}>정상 거래</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeVenueControl("AFTER_MARKET", "OPEN")}>AFTER</button><button type="button" className={venueControl.haltMode === "CANCEL_ONLY" ? "cancel-only active" : "cancel-only"} onClick={() => changeVenueControl("CLOSED", "CANCEL_ONLY")}>취소전용</button><button type="button" className={venueControl.haltMode === "FULL_STOP" ? "full-stop active" : "full-stop"} onClick={() => changeVenueControl("CLOSED", "FULL_STOP")}>전면정지</button></div></section> : null}
+          {workspaceView === "operations" && session?.user.role === "operator" && venueControl ? <section className="operator-control" aria-label="운영자 시장 통제"><div><span className="section-kicker">OPERATOR CONTROL</span><strong>{venueControl.phase} · {venueControl.haltMode}</strong><small>version {venueControl.version} · 모든 변경은 해시 감사기록에 남습니다.</small></div><div className="operator-actions"><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "PRE_MARKET" ? "active" : ""} onClick={() => changeVenueControl("PRE_MARKET", "OPEN")}>PRE</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "CONTINUOUS" ? "active" : ""} onClick={() => changeVenueControl("CONTINUOUS", "OPEN")}>정상 거래</button><button type="button" className={venueControl.haltMode === "OPEN" && venueControl.phase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeVenueControl("AFTER_MARKET", "OPEN")}>AFTER</button><button type="button" className={venueControl.haltMode === "CANCEL_ONLY" ? "cancel-only active" : "cancel-only"} onClick={() => changeVenueControl("CLOSED", "CANCEL_ONLY")}>취소전용</button><button type="button" className={venueControl.haltMode === "FULL_STOP" ? "full-stop active" : "full-stop"} onClick={() => changeVenueControl("CLOSED", "FULL_STOP")}>전면정지</button></div></section> : null}
 
+          {workspaceView === "lab" ? <>
           <section className="phase-control" aria-label="시장 세션 상태"><div><span className="section-kicker">EXECUTION SESSION</span><strong>{phaseLabel(marketPhase)}</strong><small>local control plane · operator gated</small></div><div className="phase-buttons"><button type="button" className={marketPhase === "PRE_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("PRE_MARKET")}>PRE</button><button type="button" className={marketPhase === "OPENING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("OPENING_AUCTION")}>OPEN AUCTION</button><button type="button" className={marketPhase === "CONTINUOUS" ? "active" : ""} onClick={() => changeMarketPhase("CONTINUOUS")}>CONTINUOUS</button><button type="button" className={marketPhase === "CLOSING_AUCTION" ? "active" : ""} onClick={() => changeMarketPhase("CLOSING_AUCTION")}>CLOSE AUCTION</button><button type="button" className={marketPhase === "AFTER_MARKET" ? "active" : ""} onClick={() => changeMarketPhase("AFTER_MARKET")}>AFTER</button><button type="button" className="auction-run" onClick={runAuctionCycle} disabled={marketPhase !== "OPENING_AUCTION" && marketPhase !== "CLOSING_AUCTION"}>RUN AUCTION</button><button type="button" className={marketPhase === "CLOSED" ? "active closed" : "closed"} onClick={() => changeMarketPhase("CLOSED")}>CLOSED</button></div></section>
 
           <section className="kpi-row" aria-label="엔진 상태">
@@ -388,9 +448,12 @@ export default function Home() {
 
           <div id="order-journal" className="scroll-anchor" aria-hidden="true" />
 
-          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={cancelAllOrders}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>발동가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : order.type === "MARKET" ? "시장가" : order.type === "MIDPOINT" ? "중간가" : "스톱지정가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatPrice(order.stopPrice ?? null)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "PENDING_TRIGGER" ? "발동대기" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={14} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
-          {session ? <InstitutionalArchitecturePanel /> : null}
-          <footer className="page-footer"><span>TradingStockSysyem · multi-user automated trade execution</span><span><span className="tiny-dot green" /> ENCRYPTED VAULT · PRE-TRADE RISK · TOSS / KIS / KIWOOM · KRX / NXT / SOR</span></footer>
+          <section className="panel orders-panel"><div className="panel-heading"><div><span className="section-kicker">ORDER JOURNAL</span><h2>주문 원장</h2></div><div className="table-actions"><span className="filter-chip active">현재 세션 · {orders.length}건</span><button className="danger-button" onClick={() => { const count = orders.filter((order) => order.status === "OPEN" || order.status === "PARTIAL").length; if (count) setPendingAction({ kind: "cancel-all", count }); else setMessage("취소할 미체결 주문이 없습니다"); }}>미체결 전체취소</button><button className="ghost-button" onClick={resetEngine}>초기화</button></div></div><div className="table-wrap"><table><thead><tr><th>주문 ID</th><th>종목</th><th>참가자</th><th>구분</th><th>유형</th><th>유효조건</th><th>가격</th><th>발동가격</th><th>주문수량</th><th>체결수량</th><th>잔량</th><th>상태</th><th>접수시각</th><th /></tr></thead><tbody>{orders.length ? orders.map((order) => <tr key={order.id}><td className="mono">{order.id}</td><td><strong>{instrumentFor(order.symbol).displayName}</strong><span className="muted mono">{order.symbol}</span></td><td className="mono">{order.participantId}</td><td><span className={`side-pill ${order.side === "BUY" ? "buy" : "sell"}`}>{order.side === "BUY" ? "매수" : "매도"}</span></td><td>{order.type === "LIMIT" ? "지정가" : order.type === "MARKET" ? "시장가" : order.type === "MIDPOINT" ? "중간가" : "스톱지정가"}</td><td><span className="tif-pill">{order.timeInForce}</span></td><td>{formatPrice(order.price)}</td><td>{formatPrice(order.stopPrice ?? null)}</td><td>{formatNumber(order.quantity)}</td><td className="strong-cell">{formatNumber(order.filled)}</td><td>{formatNumber(order.remaining)}</td><td><span className={`status-pill ${order.status.toLowerCase()}`}>{order.status === "OPEN" ? "대기" : order.status === "PARTIAL" ? "부분체결" : order.status === "PENDING_TRIGGER" ? "발동대기" : order.status === "FILLED" ? "체결" : order.status === "REJECTED" ? "거부" : "취소"}</span></td><td className="muted mono">{order.submittedAt}</td><td>{order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER" ? <button className="row-action" onClick={() => cancelOrder(order.id)}>취소</button> : null}</td></tr>) : <tr><td colSpan={14} className="table-empty">주문 원장이 비어 있습니다. 외부 주문은 수신하지 않습니다.</td></tr>}</tbody></table></div></section>
+          </> : null}
+          {workspaceView === "operations" ? session ? <InstitutionalArchitecturePanel /> : <section className="empty-workspace"><strong>운영 정보는 로그인 후 확인할 수 있습니다.</strong><span>회원사 세션과 사용자 원장은 계정별로 분리됩니다.</span></section> : null}
+          <footer className="page-footer"><span>Trading Stock System · guarded multi-broker execution</span><span><span className={`tiny-dot ${readiness?.ok ? "green" : "amber"}`} /> ENCRYPTED VAULT · PRE-TRADE RISK · DETERMINISTIC MATCHING</span></footer>
+
+          {pendingAction ? <div className="dialog-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPendingAction(null); }}><section className="confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-title"><span className="dialog-kicker">HIGH IMPACT ACTION</span><h2 id="confirm-title">{pendingAction.kind === "cancel-all" ? `미체결 ${pendingAction.count}건을 취소할까요?` : "시장을 전면 정지할까요?"}</h2><p>{pendingAction.kind === "cancel-all" ? "체결이 끝난 수량은 취소되지 않으며 남은 주문만 취소됩니다." : "전면정지 중에는 신규·정정·취소 요청이 모두 차단됩니다. 모든 변경은 감사 원장에 기록됩니다."}</p><div className="dialog-actions"><button type="button" className="ghost-button" onClick={() => setPendingAction(null)}>돌아가기</button><button type="button" className="danger-button" autoFocus onClick={() => void confirmPendingAction()}>{pendingAction.kind === "cancel-all" ? "전체취소 실행" : "전면정지 실행"}</button></div></section></div> : null}
         </div>
       </section>
     </main>

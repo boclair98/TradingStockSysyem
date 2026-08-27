@@ -240,7 +240,7 @@ async function requestHash(value: unknown) {
   return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export async function previewLiveOrder(userId: string, request: LiveOrderRequestRecord) {
+async function verifyLiveOrderAgainstCurrentState(userId: string, request: LiveOrderRequestRecord) {
   validateOrder(request);
   const bundle = await connectionBundle(userId, request.connectionId);
   if (bundle.connection.mode !== "production") throw new Error("실거래 주문은 production 계좌 연결에서만 가능합니다.");
@@ -265,6 +265,11 @@ export async function previewLiveOrder(userId: string, request: LiveOrderRequest
       : account.positions.find((item) => item.symbol === request.symbol)?.availableQuantity ?? 0;
     if (available < request.quantity) throw new Error("매도가능 수량이 부족합니다.");
   }
+  return { bundle, policy, quote, estimatedNotional, usage };
+}
+
+export async function previewLiveOrder(userId: string, request: LiveOrderRequestRecord) {
+  const { bundle, quote, estimatedNotional, usage, policy } = await verifyLiveOrderAgainstCurrentState(userId, request);
   const preview = await createLiveOrderPreview({ userId, connectionId: request.connectionId, requestHash: await requestHash(request), request, quotePrice: quote.lastPrice, estimatedNotional });
   await addAudit(userId, "LIVE_ORDER_PREVIEWED", preview.id, { provider: bundle.provider, symbol: request.symbol, side: request.side, quantity: request.quantity, estimatedNotional, venue: request.venue });
   return { ...preview, quote, confirmationText: LIVE_CONFIRMATION, globalLiveEnabled: GLOBAL_LIVE_ENABLED(), risk: { dailyNotional: usage.dailyNotional, dailyLimit: policy.maxDailyNotional } };
@@ -273,13 +278,20 @@ export async function previewLiveOrder(userId: string, request: LiveOrderRequest
 export async function submitPreviewedLiveOrder(userId: string, previewId: string, confirmationText: string) {
   if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치 또는 고정 출발 IP 준비가 잠겨 있습니다.");
   if (confirmationText.trim() !== LIVE_CONFIRMATION) throw new Error(`확인 문구 '${LIVE_CONFIRMATION}'을 정확히 입력하세요.`);
+  const clientOrderId = `LIVE-${previewId}`;
+  const alreadySubmitted = (await listLiveOrders(userId, 200)).find((item) => item.clientOrderId === clientOrderId);
+  if (alreadySubmitted) return alreadySubmitted;
   const preview = await consumeLiveOrderPreview(userId, previewId);
-  if (!preview) throw new Error("주문 미리보기가 만료되었거나 이미 사용되었습니다.");
+  if (!preview) {
+    const existing = (await listLiveOrders(userId, 200)).find((item) => item.clientOrderId === clientOrderId);
+    if (existing) return existing;
+    throw new Error("주문 미리보기가 만료되었거나 이미 사용되었습니다.");
+  }
   const policy = await getLiveRiskPolicy(userId);
   if (!policy.liveEnabled || policy.killSwitch) throw new Error("실거래가 잠겨 있습니다.");
   const connection = await getBrokerConnectionSecret(userId, preview.connectionId);
   if (!connection || connection.mode !== "production" || connection.status !== "connected") throw new Error("연결된 실전 계좌를 확인하세요.");
-  const clientOrderId = `LIVE-${previewId}`;
+  await verifyLiveOrderAgainstCurrentState(userId, preview.request);
   const orderId = `LORD-${crypto.randomUUID()}`;
   const pending = await createPendingLiveOrder({ id: orderId, userId, connectionId: preview.connectionId, clientOrderId, request: preview.request });
   if (!pending) {

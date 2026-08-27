@@ -7,7 +7,7 @@ export async function withDistributedEngineLock<T>(task: () => Promise<T>): Prom
   const globalState = globalThis as LockGlobal;
   if (!globalState.__atsLockPool) {
     const moduleName = "pg";
-    const { Pool } = await import(moduleName) as typeof import("pg");
+    const { Pool } = await import(/* @vite-ignore */ moduleName) as typeof import("pg");
     globalState.__atsLockPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 4, application_name: "tradingstocksysyem-matching-leader" });
   }
   const client = await globalState.__atsLockPool.connect();

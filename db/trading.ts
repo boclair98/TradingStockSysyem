@@ -86,7 +86,7 @@ function postgresSql(sql: string) {
 
 async function createPostgresAdapter(): Promise<DatabaseAdapter> {
   const moduleName = "pg";
-  const { Pool } = await import(moduleName) as typeof import("pg");
+  const { Pool } = await import(/* @vite-ignore */ moduleName) as typeof import("pg");
   const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 10 });
   return {
     kind: "postgres",
@@ -112,7 +112,7 @@ async function createPostgresAdapter(): Promise<DatabaseAdapter> {
 
 async function createD1Adapter(): Promise<DatabaseAdapter> {
   const moduleName = "cloudflare:workers";
-  const workers = await import(moduleName) as { env: { DB?: D1Like } };
+  const workers = await import(/* @vite-ignore */ moduleName) as { env: { DB?: D1Like } };
   const db = workers.env.DB;
   if (!db) throw new Error("No database binding is configured");
   return {
@@ -178,7 +178,8 @@ export async function ensurePaperUser(user: ChatGPTUser) {
     { sql: `INSERT INTO paper_accounts (user_id, participant_id, cash_balance, created_at) VALUES (?, ?, 100000000, ?) ON CONFLICT(user_id) DO NOTHING`, params: [user.userId, participantId, now] },
     ...NEXTRADE_INSTRUMENTS.map((instrument) => ({ sql: `INSERT INTO paper_positions (user_id, symbol, quantity, average_price, updated_at) VALUES (?, ?, 100, ?, ?) ON CONFLICT(user_id, symbol) DO NOTHING`, params: [user.userId, instrument.symbol, instrument.basePrice ?? 0, now] })),
   ]);
-  await db.query(`UPDATE users SET role='operator' WHERE id=? AND NOT EXISTS (SELECT 1 FROM users WHERE role='operator')`, [user.userId]);
+  const configuredOperators = new Set((process.env.OPERATOR_USER_IDS ?? "").split(",").map((value) => value.trim()).filter(Boolean));
+  if (configuredOperators.has(user.userId)) await db.query(`UPDATE users SET role='operator' WHERE id=?`, [user.userId]);
   const role = (await db.query<{ role: "operator" | "participant" }>(`SELECT role FROM users WHERE id=?`, [user.userId])).rows[0]?.role ?? "participant";
   return { participantId, role };
 }

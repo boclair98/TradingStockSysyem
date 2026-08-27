@@ -9,18 +9,20 @@ async function render() {
   return worker.fetch(new Request("http://localhost/", { headers: { accept: "text/html", host: "tradingstocksysyem.coders.kr", "x-forwarded-proto": "https" } }), { ASSETS: { fetch: async () => new Response("Not found", { status: 404 }) } }, { waitUntil() {}, passThroughOnException() {} });
 }
 
-test("server-renders the ATS engineering product shell", async () => {
+test("server-renders the task-focused trading product shell", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
   const html = await response.text();
-  assert.match(html, /<title>TradingStockSysyem \| ATS 매매체결 코어<\/title>/i);
-  assert.match(html, /ATS PRODUCT BASELINE/);
-  assert.match(html, /ENGINEERING EVALUATION BUILD/);
+  assert.match(html, /<title>Trading Stock System \| 자동 매매체결 시스템<\/title>/i);
+  assert.match(html, /실거래 주문/);
+  assert.match(html, /매칭엔진 검증/);
+  assert.match(html, /운영 모니터/);
+  assert.match(html, /시스템 아키텍처/);
   assert.match(html, /LIVE BROKER ROUTING/);
   assert.match(html, /실거래 콘솔/);
-  assert.match(html, /ATS ENGINE LAB/);
-  assert.match(html, /https:\/\/tradingstocksysyem\.coders\.kr\/og-ats\.png/);
+  assert.match(html, /AUTH REQUIRED/);
+  assert.match(html, /https:\/\/tradingstocksysyem\.coders\.kr\/og\.png/);
   assert.doesNotMatch(html, /appSecret|BROKER_APP_SECRET|12345678|test-app-secret/i);
 });
 
@@ -34,10 +36,10 @@ test("keeps real-money routing visually and semantically separate from the engin
   assert.ok(page.indexOf("<LiveTradingPanel") < page.indexOf('className="instrument-bar"'));
   assert.match(page, /실제 현금 주문은 위/);
   assert.match(panel, /실제 증권사로 주문 전송/);
-  assert.match(panel, /아직 주문 전송 안 함/);
+  assert.match(panel, /이 단계에서는 주문을 전송하지 않습니다/);
   assert.match(panel, /60초/);
   assert.match(panel, /AES-GCM/);
   assert.match(css, /\.live-console/);
   assert.match(css, /@media \(max-width: 760px\)/);
-  assert.match(layout, /결정론적 가격·시간 우선 매칭/);
+  assert.match(layout, /결정론적 매칭/);
 });

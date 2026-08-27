@@ -15,7 +15,7 @@ export default function ExchangeProductPanel() {
       <div className="exchange-product-head">
         <div>
           <span className="section-kicker">AUTOMATED EXECUTION · SYSTEM EVALUATION</span>
-          <h1>자동 매매체결 코어</h1>
+          <h2>자동 매매체결 코어</h2>
           <p>전략 주문을 접수하고 순번·위험통제·매칭·체결보고를 일관되게 처리하는 실행 코어입니다. 브로커 연결부와 체결 코어를 분리해 검증합니다.</p>
         </div>
         <span className="evaluation-badge"><i /> ENGINEERING EVALUATION BUILD</span>

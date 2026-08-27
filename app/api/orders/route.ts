@@ -26,7 +26,7 @@ export async function GET() {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
   await ensurePaperUser(user);
-  const runtime = await getHydratedPaperRuntime();
+  await getHydratedPaperRuntime();
   const state = await listUserTradingState(user.userId);
   const account = await getPaperAccount(user.userId);
   return Response.json({

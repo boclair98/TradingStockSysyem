@@ -11,6 +11,10 @@ services:
       DATABASE_URL: ${db.url}
       SITE_PROVIDER: coders
       SITE_URL: https://tradingstocksysyem.coders.kr/
+      LIVE_TRADING_ENABLED: "false"
+      LIVE_TRADING_EGRESS_READY: "false"
+      LIVE_MARKET_ENABLED: "false"
+      TRADING_ENVIRONMENT: member_certification
   db:
     type: postgres
     size: 1Gi

@@ -1,19 +1,17 @@
 import type { Metadata } from "next";
-import { headers } from "next/headers";
 import "./globals.css";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const requestHeaders = await headers();
-  const host = requestHeaders.get("x-forwarded-host") ?? requestHeaders.get("host");
-  const protocol = requestHeaders.get("x-forwarded-proto") ?? "https";
-  const origin = host ? `${protocol}://${host}` : "https://tradingstocksysyem.coders.kr";
-  const title = "TradingStockSysyem | 자동 매매체결 시스템";
-  const description = "전략 주문 실행, 결정론적 매칭, 사전 위험통제, 내구성 저널과 복구를 갖춘 자동 매매체결 시스템.";
+  const configuredSiteUrl = process.env.SITE_URL ?? "https://tradingstocksysyem.coders.kr";
+  let origin = "https://tradingstocksysyem.coders.kr";
+  try { origin = new URL(configuredSiteUrl).origin; } catch { /* use the trusted fallback */ }
+  const title = "Trading Stock System | 자동 매매체결 시스템";
+  const description = "결정론적 매칭, 다중 증권사 주문 라우팅, 사전 위험통제와 장애 대사를 검증하는 자동 매매체결 엔지니어링 프로젝트.";
   return {
     title,
     description,
     icons: { icon: "/favicon.svg", shortcut: "/favicon.svg" },
-    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og.png`, width: 1733, height: 909, alt: "TradingStockSysyem automated trade execution system" }] },
+    openGraph: { title, description, type: "website", url: origin, images: [{ url: `${origin}/og.png`, width: 1733, height: 909, alt: "Trading Stock System automated trade execution dashboard" }] },
     twitter: { card: "summary_large_image", title, description, images: [`${origin}/og.png`] },
   };
 }
