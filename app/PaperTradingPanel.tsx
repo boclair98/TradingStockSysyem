@@ -65,9 +65,7 @@ export default function PaperTradingPanel({ authenticated, strategies }: { authe
 
   function download() {
     if (!account) return;
-    const rows = [["order_id", "symbol", "side", "quantity", "filled", "remaining", "average_price", "fees", "status", "created_at"], ...account.state.orders.map((order) => [order.id, order.symbol, order.side, order.quantity, order.filled, order.remaining, order.averagePrice, order.fees, order.status, order.createdAt])];
-    const blob = new Blob(["\uFEFF" + rows.map((row) => row.join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
-    const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = "paper-orders.csv"; link.click(); URL.revokeObjectURL(url);
+    const link = document.createElement("a"); link.href = "/api/paper?format=csv"; link.download = "paper-orders.csv"; document.body.appendChild(link); link.click(); link.remove();
   }
 
   const session = account?.state.session;

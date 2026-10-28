@@ -8,11 +8,16 @@ import { checkOrderRateLimit } from "../../../engine/apiRuntime";
 export const dynamic = "force-dynamic";
 const headers = { "Cache-Control": "no-store" };
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "로그인 후 가상 계좌를 사용할 수 있습니다." }, { status: 401, headers });
   try {
     await ensurePaperUser(user);
+    if (new URL(request.url).searchParams.get("format") === "csv") {
+      const account = await getSimulationAccount(user.userId);
+      const rows = [["order_id", "symbol", "side", "quantity", "filled", "remaining", "average_price", "fees", "status", "created_at"], ...account.state.orders.map((order) => [order.id, order.symbol, order.side, order.quantity, order.filled, order.remaining, order.averagePrice, order.fees, order.status, order.createdAt])];
+      return new Response("\uFEFF" + rows.map((row) => row.join(",")).join("\r\n"), { headers: { ...headers, "Content-Type": "text/csv;charset=utf-8", "Content-Disposition": 'attachment; filename="paper-orders.csv"', "X-Content-Type-Options": "nosniff" } });
+    }
     const [account, journal] = await Promise.all([getSimulationAccount(user.userId), listSimulationCommands(user.userId)]);
     return Response.json({ ...account, journal }, { headers });
   } catch { return Response.json({ error: "가상 원장을 불러오지 못했습니다. 잠시 후 새로고침하세요." }, { status: 503, headers }); }

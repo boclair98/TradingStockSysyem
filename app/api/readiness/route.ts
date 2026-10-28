@@ -17,6 +17,14 @@ export async function GET() {
     liveMarket: liveService.liveMarket,
     gateway,
     persistence,
+    paperSimulation: {
+      enabled: persistence.ok,
+      schemaVersion: 1,
+      priceSource: "USER_REPLAY",
+      continuousMarketFeed: false,
+      realOrdersSubmitted: false,
+      concurrency: "per-user database version CAS and atomic command journal",
+    },
     paperMatchingWrites: {
       enabled: paperEngineWritesAvailable(),
       mode: paperEngineWritesAvailable() ? "postgresql-rehydrate-under-advisory-lock" : "read-only",
