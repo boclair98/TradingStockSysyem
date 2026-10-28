@@ -104,7 +104,38 @@ export const auditChain = sqliteTable("audit_chain", {
   previousHash: text("previous_hash").notNull(),
   entryHash: text("entry_hash").notNull(),
   createdAt: text("created_at").notNull(),
-}, (table) => [index("idx_audit_chain_user_time").on(table.userId, table.createdAt)]);
+}, (table) => [
+  index("idx_audit_chain_user_time").on(table.userId, table.createdAt),
+  index("idx_audit_chain_user_previous_hash").on(table.userId, table.previousHash),
+]);
+
+export const auditChainHeads = sqliteTable("audit_chain_heads", {
+  userId: text("user_id").primaryKey(),
+  entryHash: text("entry_hash").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const engineRuntimeState = sqliteTable("engine_runtime_state", {
+  venue: text("venue").primaryKey(),
+  lastSequence: integer("last_sequence").notNull().default(0),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const paperSimulationAccounts = sqliteTable("paper_simulation_accounts", {
+  userId: text("user_id").primaryKey().references(() => users.id),
+  stateJson: text("state_json").notNull(),
+  version: integer("version").notNull().default(1),
+  commitToken: text("commit_token").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const paperSimulationCommands = sqliteTable("paper_simulation_commands", {
+  userId: text("user_id").notNull().references(() => users.id),
+  commandId: text("command_id").notNull(),
+  requestHash: text("request_hash").notNull(),
+  responseJson: text("response_json").notNull(),
+  createdAt: text("created_at").notNull(),
+}, (table) => [primaryKey({ columns: [table.userId, table.commandId] }), index("idx_paper_simulation_commands_time").on(table.userId, table.createdAt)]);
 
 export const brokerConnections = sqliteTable("broker_connections", {
   id: text("id").primaryKey(),
@@ -146,6 +177,8 @@ export const automationStrategies = sqliteTable("automation_strategies", {
   lastTriggeredAt: text("last_triggered_at"),
   createdAt: text("created_at").notNull(),
   updatedAt: text("updated_at").notNull(),
+  version: integer("version").notNull().default(1),
+  commitToken: text("commit_token"),
 }, (table) => [
   index("idx_automation_strategies_user_status").on(table.userId, table.status),
   index("idx_automation_strategies_due").on(table.status, table.lastEvaluatedAt),
@@ -163,6 +196,19 @@ export const automationRuns = sqliteTable("automation_runs", {
 }, (table) => [
   index("idx_automation_runs_strategy_time").on(table.strategyId, table.createdAt),
   index("idx_automation_runs_user_time").on(table.userId, table.createdAt),
+]);
+
+export const automationValidationProgress = sqliteTable("automation_validation_progress", {
+  userId: text("user_id").notNull(),
+  strategyId: text("strategy_id").notNull(),
+  strategyFingerprint: text("strategy_fingerprint").notNull(),
+  validationCount: integer("validation_count").notNull().default(0),
+  triggerCount: integer("trigger_count").notNull().default(0),
+  waitingCount: integer("waiting_count").notNull().default(0),
+  updatedAt: text("updated_at").notNull(),
+}, (table) => [
+  primaryKey({ columns: [table.userId, table.strategyId, table.strategyFingerprint] }),
+  index("idx_automation_progress_user_strategy").on(table.userId, table.strategyId),
 ]);
 
 export const brokerRateWindows = sqliteTable("broker_rate_windows", {
@@ -241,6 +287,8 @@ export const liveRiskPolicies = sqliteTable("live_risk_policies", {
   allowedSymbolsJson: text("allowed_symbols_json").notNull().default("[]"),
   acknowledgedAt: text("acknowledged_at"),
   updatedAt: text("updated_at").notNull(),
+  version: integer("version").notNull().default(1),
+  commitToken: text("commit_token"),
 });
 
 export const liveOrderPreviews = sqliteTable("live_order_previews", {
@@ -272,6 +320,7 @@ export const liveOrders = sqliteTable("live_orders", {
   quantity: integer("quantity").notNull(),
   executedQuantity: integer("executed_quantity").notNull().default(0),
   averagePrice: integer("average_price"),
+  riskNotional: integer("risk_notional").notNull().default(0),
   status: text("status").notNull(),
   brokerCode: text("broker_code"),
   brokerMessage: text("broker_message"),

@@ -5,7 +5,7 @@ import { NEXTRADE_INSTRUMENTS } from "../engine/instrumentMaster";
 
 type Connection = { id: string; provider: string; mode: "sandbox" | "production"; accountLabel: string; accountRef: string; status: "pending" | "connected" | "error" | "disabled"; hasCredentials: boolean; lastCheckedAt: string | null; lastError: string | null };
 type Account = { deposit: number; totalEvaluation: number; netAsset: number; purchaseAmount: number; profitLoss: number; receivedAt: string; positions: Array<{ symbol: string; name: string; quantity: number; availableQuantity: number; averagePrice: number; currentPrice: number; evaluationAmount: number; profitLoss: number }> };
-type Policy = { liveEnabled: boolean; automationEnabled: boolean; killSwitch: boolean; maxOrderQuantity: number; maxOrderNotional: number; maxDailyNotional: number; maxOpenOrders: number; allowedSymbols: string[]; acknowledgedAt: string | null; updatedAt: string };
+type Policy = { liveEnabled: boolean; automationEnabled: boolean; killSwitch: boolean; maxOrderQuantity: number; maxOrderNotional: number; maxDailyNotional: number; maxOpenOrders: number; allowedSymbols: string[]; acknowledgedAt: string | null; updatedAt: string; version: number };
 type Usage = { dailyNotional: number; openOrders: number };
 type Readiness = { ready: boolean; service: { globalLiveEnabled: boolean; liveTradingSwitch: boolean; egressReady: boolean; encryptionKeyConfigured: boolean; blockers: string[]; environment: string; liveMarket: boolean; providers: string[]; executionReconciliation: string }; productionConnection: Connection | null; policy: Policy; usage: Usage };
 type LiveOrder = { id: string; connectionId: string; clientOrderId: string; brokerOrderId: string | null; symbol: string; side: "BUY" | "SELL"; orderType: "LIMIT" | "MARKET"; timeInForce: "DAY" | "IOC" | "FOK"; venue: "KRX" | "NXT" | "SOR"; price: number | null; quantity: number; executedQuantity: number; averagePrice: number | null; status: string; brokerMessage: string | null; submittedAt: string; updatedAt: string };
@@ -140,7 +140,7 @@ export default function LiveTradingPanel({ authenticated }: { authenticated: boo
     if (!policy) return;
     setBusy(true);
     try {
-      const result = await jsonRequest<{ policy: Policy }>("/api/live/risk", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...next, acknowledgement: includeAck ? acknowledgement : undefined }) });
+      const result = await jsonRequest<{ policy: Policy }>("/api/live/risk", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...next, expectedVersion: policy.version, acknowledgement: includeAck ? acknowledgement : undefined }) });
       setPolicy(result.policy); setAcknowledgement(""); setMessage(result.policy.killSwitch ? "비상정지 활성화 · 모든 신규 실전 주문 차단" : result.policy.liveEnabled ? "사용자 실거래 허용 · 주문별 최종확인은 계속 필요" : "사용자 실거래 잠금");
       await load(true);
     } catch (error) { setMessage(error instanceof Error ? error.message : "위험정책 변경 실패"); }
@@ -198,7 +198,7 @@ export default function LiveTradingPanel({ authenticated }: { authenticated: boo
         <div className={`live-state ${readiness?.ready ? "ready" : "blocked"}`}><span className={`tiny-dot ${readiness?.ready ? "green" : "amber"}`} />{readiness?.ready ? "LIVE READY" : "SAFETY LOCKED"}</div>
       </div>
 
-      <div className="live-guardrail"><strong>실제 현금 주문</strong><div><span>서버 허용 + 고정 출발 IP + 사용자 위험동의 + 60초 주문확인 네 단계가 모두 통과해야 전송됩니다. 현재 환경: {readiness?.service.environment ?? "확인 중"} · {readiness?.service.liveMarket ? "실시간 시장" : "인증·검증 모드"}</span>{readiness?.service.blockers.length ? <small className="live-blockers">잠금 사유: {readiness.service.blockers.join(" · ")}</small> : <small className="live-blockers ready">모든 서버 게이트 통과</small>}</div></div>
+      <div className="live-guardrail"><strong>실제 현금 주문</strong><div><span>서버 허용 + 고정 출발 IP + 사용자 위험동의 + 60초 주문확인 네 단계가 모두 통과해야 전송됩니다. 현재 환경: {readiness?.service.environment ?? "확인 중"} · {readiness?.service.liveMarket ? "실시간 시장" : "인증·검증 모드"}</span>{!readiness ? <small className="live-blockers">서버 게이트 확인 중</small> : readiness.service.blockers.length ? <small className="live-blockers">잠금 사유: {readiness.service.blockers.join(" · ")}</small> : <small className="live-blockers ready">모든 서버 게이트 통과</small>}</div></div>
       <div className="live-message" aria-live="polite" role="status"><span className={busy ? "pulse-dot" : "tiny-dot green"} />{message}<time>{lastUpdatedAt ? `마지막 동기화 ${time(lastUpdatedAt)}` : ""}</time></div>
 
       <div className="live-grid">

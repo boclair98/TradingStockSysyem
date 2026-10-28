@@ -50,35 +50,34 @@ export type LiveRiskPolicy = {
   allowedSymbols: string[];
   acknowledgedAt: string | null;
   updatedAt: string;
+  version: number;
 };
 
 function mapRiskRow(row: Record<string, unknown>): LiveRiskPolicy {
   let allowedSymbols: string[] = [];
   try { allowedSymbols = JSON.parse(String(row.allowedSymbolsJson ?? "[]")) as string[]; } catch { allowedSymbols = []; }
-  return { liveEnabled: Number(row.liveEnabled) === 1, automationEnabled: Number(row.automationEnabled) === 1, killSwitch: Number(row.killSwitch) === 1, maxOrderQuantity: Number(row.maxOrderQuantity), maxOrderNotional: Number(row.maxOrderNotional), maxDailyNotional: Number(row.maxDailyNotional), maxOpenOrders: Number(row.maxOpenOrders), allowedSymbols, acknowledgedAt: row.acknowledgedAt ? String(row.acknowledgedAt) : null, updatedAt: String(row.updatedAt) };
+  return { liveEnabled: Number(row.liveEnabled) === 1, automationEnabled: Number(row.automationEnabled) === 1, killSwitch: Number(row.killSwitch) === 1, maxOrderQuantity: Number(row.maxOrderQuantity), maxOrderNotional: Number(row.maxOrderNotional), maxDailyNotional: Number(row.maxDailyNotional), maxOpenOrders: Number(row.maxOpenOrders), allowedSymbols, acknowledgedAt: row.acknowledgedAt ? String(row.acknowledgedAt) : null, updatedAt: String(row.updatedAt), version: Number(row.version) };
 }
 
 export async function getLiveRiskPolicy(userId: string): Promise<LiveRiskPolicy> {
   const db = await getTradingDb();
   const now = new Date().toISOString();
-  await db.query(`INSERT INTO live_risk_policies (user_id, live_enabled, automation_enabled, kill_switch, max_order_quantity, max_order_notional, max_daily_notional, max_open_orders, allowed_symbols_json, acknowledged_at, updated_at) VALUES (?, 0, 0, 1, 10, 1000000, 5000000, 5, '[]', NULL, ?) ON CONFLICT(user_id) DO NOTHING`, [userId, now]);
-  const row = (await db.query<Record<string, unknown>>(`SELECT live_enabled AS "liveEnabled", automation_enabled AS "automationEnabled", kill_switch AS "killSwitch", max_order_quantity AS "maxOrderQuantity", max_order_notional AS "maxOrderNotional", max_daily_notional AS "maxDailyNotional", max_open_orders AS "maxOpenOrders", allowed_symbols_json AS "allowedSymbolsJson", acknowledged_at AS "acknowledgedAt", updated_at AS "updatedAt" FROM live_risk_policies WHERE user_id=?`, [userId])).rows[0];
+  await db.query(`INSERT INTO live_risk_policies (user_id, live_enabled, automation_enabled, kill_switch, max_order_quantity, max_order_notional, max_daily_notional, max_open_orders, allowed_symbols_json, acknowledged_at, updated_at, version) VALUES (?, 0, 0, 1, 10, 1000000, 5000000, 5, '[]', NULL, ?, 1) ON CONFLICT(user_id) DO NOTHING`, [userId, now]);
+  const row = (await db.query<Record<string, unknown>>(`SELECT live_enabled AS "liveEnabled", automation_enabled AS "automationEnabled", kill_switch AS "killSwitch", max_order_quantity AS "maxOrderQuantity", max_order_notional AS "maxOrderNotional", max_daily_notional AS "maxDailyNotional", max_open_orders AS "maxOpenOrders", allowed_symbols_json AS "allowedSymbolsJson", acknowledged_at AS "acknowledgedAt", updated_at AS "updatedAt", version FROM live_risk_policies WHERE user_id=?`, [userId])).rows[0];
   if (!row) throw new Error("live risk policy unavailable");
   return mapRiskRow(row);
 }
 
-export async function saveLiveRiskPolicy(userId: string, policy: Omit<LiveRiskPolicy, "updatedAt">) {
-  const db = await getTradingDb();
-  const now = new Date().toISOString();
-  await db.query(`INSERT INTO live_risk_policies (user_id, live_enabled, automation_enabled, kill_switch, max_order_quantity, max_order_notional, max_daily_notional, max_open_orders, allowed_symbols_json, acknowledged_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET live_enabled=excluded.live_enabled, automation_enabled=excluded.automation_enabled, kill_switch=excluded.kill_switch, max_order_quantity=excluded.max_order_quantity, max_order_notional=excluded.max_order_notional, max_daily_notional=excluded.max_daily_notional, max_open_orders=excluded.max_open_orders, allowed_symbols_json=excluded.allowed_symbols_json, acknowledged_at=excluded.acknowledged_at, updated_at=excluded.updated_at`, [userId, policy.liveEnabled ? 1 : 0, policy.automationEnabled ? 1 : 0, policy.killSwitch ? 1 : 0, policy.maxOrderQuantity, policy.maxOrderNotional, policy.maxDailyNotional, policy.maxOpenOrders, JSON.stringify(policy.allowedSymbols), policy.acknowledgedAt, now]);
-  return getLiveRiskPolicy(userId);
-}
-
 export async function getLiveRiskUsage(userId: string) {
   const db = await getTradingDb();
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
-  const row = (await db.query<{ dailyNotional: number; openOrders: number }>(`SELECT COALESCE(SUM(CASE WHEN submitted_at>=? AND status NOT IN ('REJECTED','CANCELLED') THEN COALESCE(price, average_price, 0)*quantity ELSE 0 END),0) AS "dailyNotional", COALESCE(SUM(CASE WHEN status IN ('PENDING','SUBMITTED','PARTIAL','CANCEL_REQUESTED','UNKNOWN') THEN 1 ELSE 0 END),0) AS "openOrders" FROM live_orders WHERE user_id=?`, [start.toISOString(), userId])).rows[0];
+  const day = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const start = new Date(`${day}T00:00:00+09:00`);
+  const row = (await db.query<{ dailyNotional: number; openOrders: number }>(`SELECT COALESCE(SUM(CASE
+    WHEN submitted_at<? OR status='REJECTED' THEN 0
+    WHEN status='CANCELLED' AND executed_quantity=0 THEN 0
+    WHEN status='CANCELLED' THEN COALESCE(NULLIF(average_price,0)*executed_quantity, NULLIF(price,0)*executed_quantity, NULLIF(risk_notional,0), 1000000000000)
+    ELSE COALESCE(NULLIF(risk_notional,0), NULLIF(price,0)*quantity, NULLIF(average_price,0)*quantity, 1000000000000)
+  END),0) AS "dailyNotional", COALESCE(SUM(CASE WHEN status IN ('PENDING','SUBMITTED','PARTIAL','CANCEL_REQUESTED','UNKNOWN') THEN 1 ELSE 0 END),0) AS "openOrders" FROM live_orders WHERE user_id=?`, [start.toISOString(), userId])).rows[0];
   return { dailyNotional: Number(row?.dailyNotional ?? 0), openOrders: Number(row?.openOrders ?? 0) };
 }
 
@@ -113,10 +112,10 @@ function normalizeLiveOrder(row: LiveOrderRecord): LiveOrderRecord {
   return { ...row, price: row.price == null ? null : Number(row.price), quantity: Number(row.quantity), executedQuantity: Number(row.executedQuantity), averagePrice: row.averagePrice == null ? null : Number(row.averagePrice) };
 }
 
-export async function createPendingLiveOrder(input: { id: string; userId: string; connectionId: string; clientOrderId: string; request: LiveOrderRequestRecord }) {
+export async function createPendingLiveOrder(input: { id: string; userId: string; connectionId: string; clientOrderId: string; request: LiveOrderRequestRecord; riskNotional: number }) {
   const db = await getTradingDb();
   const now = new Date().toISOString();
-  await db.query(`INSERT INTO live_orders (id, user_id, connection_id, client_order_id, broker_order_id, broker_org_no, symbol, side, order_type, time_in_force, venue, price, quantity, executed_quantity, average_price, status, broker_code, broker_message, submitted_at, updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0, NULL, 'PENDING', NULL, NULL, ?, ?) ON CONFLICT(user_id, client_order_id) DO NOTHING`, [input.id, input.userId, input.connectionId, input.clientOrderId, input.request.symbol, input.request.side, input.request.orderType, input.request.timeInForce, input.request.venue, input.request.price, input.request.quantity, now, now]);
+  await db.query(`INSERT INTO live_orders (id, user_id, connection_id, client_order_id, broker_order_id, broker_org_no, symbol, side, order_type, time_in_force, venue, price, quantity, executed_quantity, average_price, risk_notional, status, broker_code, broker_message, submitted_at, updated_at) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, 'PENDING', NULL, NULL, ?, ?) ON CONFLICT(user_id, client_order_id) DO NOTHING`, [input.id, input.userId, input.connectionId, input.clientOrderId, input.request.symbol, input.request.side, input.request.orderType, input.request.timeInForce, input.request.venue, input.request.price, input.request.quantity, input.riskNotional, now, now]);
   return getLiveOrder(input.userId, input.id);
 }
 
@@ -132,6 +131,12 @@ export async function getLiveOrder(userId: string, orderId: string) {
   return row ? normalizeLiveOrder(row) : null;
 }
 
+export async function getLiveOrderByClientOrderId(userId: string, clientOrderId: string) {
+  const db = await getTradingDb();
+  const row = (await db.query<LiveOrderRecord>(`SELECT ${liveOrderSelect} FROM live_orders WHERE user_id=? AND client_order_id=?`, [userId, clientOrderId])).rows[0];
+  return row ? normalizeLiveOrder(row) : null;
+}
+
 export async function listLiveOrders(userId: string, limit = 100) {
   const db = await getTradingDb();
   const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
@@ -144,4 +149,10 @@ export async function listLiveOrdersForConnection(userId: string, connectionId: 
   const safeLimit = Math.max(1, Math.min(500, Math.trunc(limit)));
   const rows = await db.query<LiveOrderRecord>(`SELECT ${liveOrderSelect} FROM live_orders WHERE user_id=? AND connection_id=? ORDER BY updated_at DESC LIMIT ${safeLimit}`, [userId, connectionId]);
   return rows.rows.map(normalizeLiveOrder);
+}
+
+export async function hasUnresolvedLiveOrderForConnection(userId: string, connectionId: string) {
+  const db = await getTradingDb();
+  const row = (await db.query<{ present: number }>(`SELECT 1 AS present FROM live_orders WHERE user_id=? AND connection_id=? AND status IN ('PENDING','SUBMITTED','PARTIAL','CANCEL_REQUESTED','UNKNOWN') LIMIT 1`, [userId, connectionId])).rows[0];
+  return Number(row?.present ?? 0) === 1;
 }

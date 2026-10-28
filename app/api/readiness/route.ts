@@ -1,4 +1,4 @@
-import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
+import { getHydratedPaperRuntime, paperEngineWritesAvailable } from "../../../engine/apiRuntime";
 import { getGatewayOperations, getPersistenceHealth } from "../../../db/trading";
 import { getLiveServiceReadiness } from "../../../engine/liveTradingService";
 
@@ -17,6 +17,11 @@ export async function GET() {
     liveMarket: liveService.liveMarket,
     gateway,
     persistence,
+    paperMatchingWrites: {
+      enabled: paperEngineWritesAvailable(),
+      mode: paperEngineWritesAvailable() ? "postgresql-rehydrate-under-advisory-lock" : "read-only",
+      reason: paperEngineWritesAvailable() ? null : "shared LAB requires PostgreSQL and an approved single-writer runtime; isolated paper simulation remains available",
+    },
     engine: {
       status: runtime.venueControl?.haltMode === "OPEN" ? "ready" : "halted",
       sequence: runtime.engine.sequenceNumber,

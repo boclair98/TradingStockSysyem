@@ -1,5 +1,5 @@
 import { addAudit, deleteBrokerConnection, listBrokerConnections, saveBrokerConnection } from "../db/trading";
-import { consumeLiveOrderPreview, createLiveOrderPreview, createPendingLiveOrder, deleteBrokerToken, getBrokerConnectionSecret, getBrokerToken, getLiveOrder, getLiveRiskPolicy, getLiveRiskUsage, listLiveOrders, listLiveOrdersForConnection, saveBrokerToken, updateBrokerConnectionState, updateLiveOrderBrokerState, type LiveOrderRequestRecord } from "../db/liveTrading";
+import { consumeLiveOrderPreview, createLiveOrderPreview, createPendingLiveOrder, deleteBrokerToken, getBrokerConnectionSecret, getBrokerToken, getLiveOrder, getLiveOrderByClientOrderId, getLiveRiskPolicy, getLiveRiskUsage, hasUnresolvedLiveOrderForConnection, listLiveOrders, listLiveOrdersForConnection, saveBrokerToken, updateBrokerConnectionState, updateLiveOrderBrokerState, type LiveOrderRequestRecord } from "../db/liveTrading";
 import { credentialFingerprint, decryptCredential, encryptCredential, maskAccount } from "./credentialVault";
 import { cancelKisOrder, getKisAccount, getKisDailyOrders, getKisQuote, issueKisToken, KisApiError, submitKisCashOrder, type KisCredentials, type KisMode } from "./koreaInvestmentClient";
 import { cancelKiwoomOrder, getKiwoomAccount, getKiwoomAccountNumber, getKiwoomOrders, getKiwoomQuote, issueKiwoomToken, KiwoomApiError, submitKiwoomCashOrder, type KiwoomCredentials, type KiwoomMode } from "./kiwoomClient";
@@ -9,7 +9,7 @@ const LIVE_CONFIRMATION = "실거래 주문 실행";
 const EGRESS_READY = () => process.env.LIVE_TRADING_EGRESS_READY === "true";
 const TRADING_ENVIRONMENT = () => process.env.TRADING_ENVIRONMENT?.trim() || "member_certification";
 const LIVE_MARKET_ENABLED = () => process.env.LIVE_MARKET_ENABLED === "true" && TRADING_ENVIRONMENT() === "production";
-const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_TRADING_ENABLED === "true" && EGRESS_READY() && LIVE_MARKET_ENABLED();
+const GLOBAL_LIVE_ENABLED = () => process.env.LIVE_ORDER_ROUTING_RELEASED === "true" && process.env.LIVE_TRADING_ENABLED === "true" && Boolean(process.env.DATABASE_URL) && EGRESS_READY() && LIVE_MARKET_ENABLED();
 
 type StoredConnection = NonNullable<Awaited<ReturnType<typeof getBrokerConnectionSecret>>>;
 type KisBundle = { provider: "korea_investment"; connection: StoredConnection; credentials: KisCredentials };
@@ -97,11 +97,15 @@ function brokerFailure(error: unknown, fallback: string) {
 export function getLiveServiceReadiness() {
   const encryptionKeyConfigured = (process.env.CREDENTIAL_ENCRYPTION_KEY?.trim().length ?? 0) >= 32;
   const liveTradingSwitch = process.env.LIVE_TRADING_ENABLED === "true";
+  const routingReleased = process.env.LIVE_ORDER_ROUTING_RELEASED === "true";
+  const durableLockReady = Boolean(process.env.DATABASE_URL);
   const egressReady = EGRESS_READY();
   const environment = TRADING_ENVIRONMENT();
   const liveMarket = LIVE_MARKET_ENABLED();
   const blockers = [
     ...(liveTradingSwitch ? [] : ["LIVE_TRADING_ENABLED is not enabled"]),
+    ...(routingReleased ? [] : ["LIVE_ORDER_ROUTING_RELEASED is not enabled"]),
+    ...(durableLockReady ? [] : ["DATABASE_URL is required for live-order serialization"]),
     ...(egressReady ? [] : ["LIVE_TRADING_EGRESS_READY is not enabled"]),
     ...(environment === "production" ? [] : ["TRADING_ENVIRONMENT is not production"]),
     ...(liveMarket ? [] : ["LIVE_MARKET_ENABLED is not enabled"]),
@@ -110,6 +114,8 @@ export function getLiveServiceReadiness() {
   return {
     globalLiveEnabled: GLOBAL_LIVE_ENABLED(),
     liveTradingSwitch,
+    routingReleased,
+    durableLockReady,
     egressReady,
     encryptionKeyConfigured,
     blockers,
@@ -123,7 +129,7 @@ export function getLiveServiceReadiness() {
     },
     productionOrderEndpoint: "broker-adapter/order-cash",
     executionReconciliation: "broker order history reconciliation",
-    safeguards: ["per-user encrypted credentials", "server + egress + user + order four-stage arming", "one-time 60 second preview", "idempotent local order journal", "unknown-state reconciliation", "kill switch", "cash-only risk limits"],
+    safeguards: ["per-user encrypted credentials", "release + server + egress + user + order five-stage arming", "PostgreSQL advisory serialization", "one-time 60 second preview", "idempotent local order journal", "unknown-state reconciliation", "kill switch", "cash-only risk limits"],
   };
 }
 
@@ -207,6 +213,9 @@ export async function connectKiwoom(userId: string, input: { mode: KiwoomMode; a
 }
 
 export async function disconnectLiveBroker(userId: string, connectionId: string) {
+  const ownedConnection = await getBrokerConnectionSecret(userId, connectionId);
+  if (!ownedConnection) return false;
+  if (await hasUnresolvedLiveOrderForConnection(userId, connectionId)) throw new Error("미체결 또는 대사 필요 주문이 있어 연결을 해제할 수 없습니다. 먼저 취소·대사를 완료하세요.");
   await deleteBrokerToken(connectionId);
   const deleted = await deleteBrokerConnection(userId, connectionId);
   if (deleted) await addAudit(userId, "LIVE_BROKER_DISCONNECTED", connectionId, {});
@@ -253,6 +262,7 @@ async function verifyLiveOrderAgainstCurrentState(userId: string, request: LiveO
   const quote = await getLiveQuote(userId, request.connectionId, request.symbol, request.venue);
   const referencePrice = request.orderType === "LIMIT" ? request.price ?? 0 : Math.ceil((request.side === "BUY" ? quote.bestAsk ?? quote.lastPrice : quote.bestBid ?? quote.lastPrice) * (request.side === "BUY" ? 1.03 : 1));
   const estimatedNotional = referencePrice * request.quantity;
+  if (!Number.isSafeInteger(referencePrice) || referencePrice <= 0 || !Number.isSafeInteger(estimatedNotional) || estimatedNotional <= 0) throw new Error("현재 시세로 안전한 주문금액을 계산할 수 없습니다.");
   if (estimatedNotional > policy.maxOrderNotional) throw new Error(`주문당 최대금액 ${policy.maxOrderNotional.toLocaleString("ko-KR")}원을 초과했습니다.`);
   const usage = await getLiveRiskUsage(userId);
   if (usage.dailyNotional + estimatedNotional > policy.maxDailyNotional) throw new Error("일일 주문금액 한도를 초과합니다.");
@@ -279,11 +289,11 @@ export async function submitPreviewedLiveOrder(userId: string, previewId: string
   if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치 또는 고정 출발 IP 준비가 잠겨 있습니다.");
   if (confirmationText.trim() !== LIVE_CONFIRMATION) throw new Error(`확인 문구 '${LIVE_CONFIRMATION}'을 정확히 입력하세요.`);
   const clientOrderId = `LIVE-${previewId}`;
-  const alreadySubmitted = (await listLiveOrders(userId, 200)).find((item) => item.clientOrderId === clientOrderId);
+  const alreadySubmitted = await getLiveOrderByClientOrderId(userId, clientOrderId);
   if (alreadySubmitted) return alreadySubmitted;
   const preview = await consumeLiveOrderPreview(userId, previewId);
   if (!preview) {
-    const existing = (await listLiveOrders(userId, 200)).find((item) => item.clientOrderId === clientOrderId);
+    const existing = await getLiveOrderByClientOrderId(userId, clientOrderId);
     if (existing) return existing;
     throw new Error("주문 미리보기가 만료되었거나 이미 사용되었습니다.");
   }
@@ -291,11 +301,11 @@ export async function submitPreviewedLiveOrder(userId: string, previewId: string
   if (!policy.liveEnabled || policy.killSwitch) throw new Error("실거래가 잠겨 있습니다.");
   const connection = await getBrokerConnectionSecret(userId, preview.connectionId);
   if (!connection || connection.mode !== "production" || connection.status !== "connected") throw new Error("연결된 실전 계좌를 확인하세요.");
-  await verifyLiveOrderAgainstCurrentState(userId, preview.request);
+  const currentVerification = await verifyLiveOrderAgainstCurrentState(userId, preview.request);
   const orderId = `LORD-${crypto.randomUUID()}`;
-  const pending = await createPendingLiveOrder({ id: orderId, userId, connectionId: preview.connectionId, clientOrderId, request: preview.request });
+  const pending = await createPendingLiveOrder({ id: orderId, userId, connectionId: preview.connectionId, clientOrderId, request: preview.request, riskNotional: Math.max(preview.estimatedNotional, currentVerification.estimatedNotional) });
   if (!pending) {
-    const existing = (await listLiveOrders(userId, 200)).find((item) => item.clientOrderId === clientOrderId);
+    const existing = await getLiveOrderByClientOrderId(userId, clientOrderId);
     if (existing) return existing;
     throw new Error("실전 주문 원장을 생성할 수 없습니다.");
   }
@@ -321,7 +331,6 @@ export async function submitPreviewedLiveOrder(userId: string, previewId: string
 }
 
 export async function cancelLiveOrder(userId: string, orderId: string) {
-  if (!GLOBAL_LIVE_ENABLED()) throw new Error("서버 실거래 스위치 또는 고정 출발 IP 준비가 잠겨 있습니다.");
   const order = await getLiveOrder(userId, orderId);
   if (!order?.brokerOrderId) throw new Error("취소할 증권사 주문을 찾을 수 없습니다.");
   if (!["SUBMITTED", "PARTIAL", "UNKNOWN"].includes(order.status)) throw new Error("현재 상태에서는 취소할 수 없습니다.");

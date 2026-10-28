@@ -1,10 +1,12 @@
-import { getHydratedPaperRuntime } from "../../../engine/apiRuntime";
+import { getHydratedPaperRuntime, getPaperRuntime } from "../../../engine/apiRuntime";
+import { getPaperEventBroadcaster } from "../../../engine/paperEventBroadcaster";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
   const runtimeState = await getHydratedPaperRuntime();
+  const broadcaster = getPaperEventBroadcaster();
   const encoder = new TextEncoder();
   let closed = false;
   let unsubscribe: () => void = () => undefined;
@@ -17,11 +19,11 @@ export async function GET(request: Request) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`));
       };
       send("ready", { venue: "NEXTRADE", sequence: runtimeState.engine.sequenceNumber, control: runtimeState.venueControl });
-      unsubscribe = runtimeState.engine.subscribe((event) => {
+      unsubscribe = broadcaster.subscribe((event) => {
         if (event.type === "EXECUTION" || event.type === "MARKET_STATE_CHANGED" || event.type === "AUCTION_EXECUTED") send("market", event);
         else send("book", { type: "BOOK_CHANGED", sequence: event.sequence });
       });
-      heartbeat = setInterval(() => send("heartbeat", { timestamp: new Date().toISOString(), sequence: runtimeState.engine.sequenceNumber }), 15_000);
+      heartbeat = setInterval(() => send("heartbeat", { timestamp: new Date().toISOString(), sequence: getPaperRuntime().engine.sequenceNumber }), 15_000);
     },
     cancel() {
       closed = true;

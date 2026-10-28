@@ -149,3 +149,11 @@ test("journal recovery preserves original quantity, remaining quantity and queue
   assert.equal(engine.sequenceNumber, 812);
   assert.equal(engine.snapshot("005930").bidLevels[0]?.quantity, 35);
 });
+
+test("journal recovery preserves the last sequence even when no order remains open", () => {
+  const engine = new MatchingEngine();
+  engine.restoreSequence(900);
+  const result = engine.submit({ id: "AFTER-EMPTY-RECOVERY", symbol: "005930", participantId: "BANK-2", side: "BUY", type: "LIMIT", timeInForce: "GTC", price: 10000, quantity: 1 });
+  assert.equal(result.accepted, true);
+  assert.ok((result.order?.sequence ?? 0) > 900);
+});

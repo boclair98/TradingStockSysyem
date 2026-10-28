@@ -138,6 +138,15 @@ export interface CancelResult {
   reason?: string;
 }
 
+export interface ReplaceOrderPreview {
+  replaceable: boolean;
+  current: Order | null;
+  desiredQuantity: number;
+  replacementQuantity: number;
+  referencePrice: number | null;
+  reason?: string;
+}
+
 type Book = { bids: Map<string, Order>; asks: Map<string, Order> };
 type Listener = (event: EngineEvent) => void;
 
@@ -230,6 +239,11 @@ export class MatchingEngine {
     this.sequence = Math.max(this.sequence, order.sequence);
     if (order.status === "PENDING_TRIGGER") this.stopOrders.set(order.id, order);
     else this.addToBook(this.getBook(order.symbol), order);
+  }
+
+  restoreSequence(sequence: number): void {
+    if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("invalid recovery sequence");
+    this.sequence = Math.max(this.sequence, sequence);
   }
 
   registerInstrument(config: InstrumentConfig): void {
@@ -442,17 +456,54 @@ export class MatchingEngine {
     return { cancelled: true, order: cloneOrder(order) };
   }
 
-  replace(orderId: string, quantity: number, price?: number | null, participantId?: string): SubmitOrderResult {
+  previewReplace(orderId: string, quantity: number, price?: number | null, participantId?: string): ReplaceOrderPreview {
     const current = this.orders.get(orderId);
-    if (!current) return { accepted: false, order: null, executions: [], reason: "order not found" };
-    if (participantId && current.participantId !== participantId) return { accepted: false, order: null, executions: [], reason: "participant mismatch" };
-    if (current.status === "FILLED" || current.status === "CANCELLED" || current.status === "REJECTED") return { accepted: false, order: null, executions: [], reason: "order is not replaceable" };
+    const rejected = (reason: string): ReplaceOrderPreview => ({ replaceable: false, current: current ? cloneOrder(current) : null, desiredQuantity: quantity, replacementQuantity: 0, referencePrice: null, reason });
+    if (!current) return rejected("order not found");
+    if (participantId && current.participantId !== participantId) return rejected("participant mismatch");
+    if (current.status === "FILLED" || current.status === "CANCELLED" || current.status === "REJECTED") return rejected("order is not replaceable");
     const filled = current.quantity - current.remaining;
-    if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity < filled) return { accepted: false, order: null, executions: [], reason: "replacement quantity cannot be below filled quantity" };
+    if (!Number.isSafeInteger(quantity) || quantity <= filled) return rejected("replacement quantity must be greater than filled quantity");
+    const replacementQuantity = quantity - filled;
+    const replacementInput: SubmitOrderInput = {
+      id: `${orderId}-REPLACE-PREVIEW`,
+      symbol: current.symbol,
+      participantId: current.participantId,
+      side: current.side,
+      type: current.type,
+      timeInForce: current.timeInForce,
+      quantity: replacementQuantity,
+      price: current.type === "MARKET" || current.type === "MIDPOINT" ? null : price ?? current.price,
+      stopPrice: current.type === "STOP_LIMIT" ? current.stopPrice : null,
+    };
+    const desiredQuantityValidation = this.validate({ ...replacementInput, quantity }, current.timeInForce);
+    if (desiredQuantityValidation) return rejected(desiredQuantityValidation);
+    const replacementValidation = this.validate(replacementInput, current.timeInForce);
+    if (replacementValidation) return rejected(replacementValidation);
+
+    const referencePrice = current.type === "MIDPOINT"
+      ? this.currentMidpoint(this.getBook(current.symbol), current.id)
+      : replacementInput.price ?? this.instrument(current.symbol).basePrice ?? null;
+    if (current.type === "MIDPOINT" && referencePrice == null) return rejected("midpoint order requires a two-sided quote after replacement");
+    const riskReason = this.riskReason({ ...replacementInput, quantity }, current.participantId, current.id, referencePrice);
+    if (riskReason) return rejected(riskReason);
+    return {
+      replaceable: true,
+      current: cloneOrder(current),
+      desiredQuantity: quantity,
+      replacementQuantity,
+      referencePrice,
+    };
+  }
+
+  replace(orderId: string, quantity: number, price?: number | null, participantId?: string): SubmitOrderResult {
+    const preview = this.previewReplace(orderId, quantity, price, participantId);
+    if (!preview.replaceable || !preview.current) return { accepted: false, order: null, executions: [], reason: preview.reason };
+    const current = preview.current;
     const cancelled = this.cancel(orderId, participantId, "REPLACED");
     if (!cancelled.cancelled) return { accepted: false, order: null, executions: [], reason: cancelled.reason };
     const replacementId = `${orderId}-R${this.sequence + 1}`;
-    const result = this.submit({ id: replacementId, symbol: current.symbol, participantId: current.participantId, side: current.side, type: current.type, timeInForce: current.timeInForce, quantity, price: current.type === "MARKET" || current.type === "MIDPOINT" ? null : price ?? current.price, stopPrice: current.type === "STOP_LIMIT" ? current.stopPrice : null });
+    const result = this.submit({ id: replacementId, symbol: current.symbol, participantId: current.participantId, side: current.side, type: current.type, timeInForce: current.timeInForce, quantity: preview.replacementQuantity, price: current.type === "MARKET" || current.type === "MIDPOINT" ? null : price ?? current.price, stopPrice: current.type === "STOP_LIMIT" ? current.stopPrice : null });
     if (result.order) {
       result.order.replacesOrderId = orderId;
       const stored = this.orders.get(result.order.id);
@@ -552,21 +603,21 @@ export class MatchingEngine {
     return undefined;
   }
 
-  private riskReason(input: SubmitOrderInput, participantId: string): string | undefined {
+  private riskReason(input: SubmitOrderInput, participantId: string, excludedOrderId?: string, referencePriceOverride?: number | null): string | undefined {
     if (this.haltedParticipants.has(participantId)) return "participant is halted by risk control";
     const limits = this.participantRisk.get(participantId) ?? DEFAULT_RISK_LIMITS;
     if (input.quantity > limits.maxOrderQuantity) return `quantity exceeds participant limit ${limits.maxOrderQuantity}`;
-    const openOrders = [...this.orders.values()].filter((order) => order.participantId === participantId && (order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER")).length;
+    const openOrders = [...this.orders.values()].filter((order) => order.id !== excludedOrderId && order.participantId === participantId && (order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER")).length;
     if (openOrders >= limits.maxOpenOrders) return `open order limit exceeded (${limits.maxOpenOrders})`;
     const instrument = this.instrument(input.symbol);
-    const referencePrice = input.price ?? instrument.basePrice ?? 0;
+    const referencePrice = referencePriceOverride ?? input.price ?? instrument.basePrice ?? 0;
     if (referencePrice > 0 && referencePrice * input.quantity > limits.maxOrderNotional) return `order notional exceeds participant limit ${limits.maxOrderNotional}`;
     return undefined;
   }
 
-  private currentMidpoint(book: Book): number | null {
-    const bid = this.sorted(book.bids, "BUY")[0]?.price;
-    const ask = this.sorted(book.asks, "SELL")[0]?.price;
+  private currentMidpoint(book: Book, excludedOrderId?: string): number | null {
+    const bid = this.sorted(book.bids, "BUY").find((order) => order.id !== excludedOrderId)?.price;
+    const ask = this.sorted(book.asks, "SELL").find((order) => order.id !== excludedOrderId)?.price;
     if (bid == null || ask == null || ask < bid) return null;
     const midpoint = (bid + ask) / 2;
     return Number.isSafeInteger(midpoint) ? midpoint : Math.floor(midpoint);

@@ -8,7 +8,7 @@
 - AES-256-GCM 자격증명 암호화와 마스킹
 - 토큰 캐시, 실시간 잔고·시세, 매수·매도 사전검사
 - 사용자별 주문수량·금액·일일금액·미체결 한도
-- 서버 전역 잠금, 고정 출발 IP 잠금, 사용자 동의, 킬 스위치
+- PostgreSQL 분산 잠금, 고정 출발 IP 잠금, 사용자 동의, version CAS 킬 스위치
 - 60초 일회성 미리보기와 최종 확인문구
 - 중복 방지 주문 원장, 주문·취소, 불확실 상태, 체결대사, 감사로그
 
@@ -35,11 +35,14 @@
 
 ## 배포 잠금 해제 순서
 
-1. 운영 환경에 32바이트 이상 무작위 `CREDENTIAL_ENCRYPTION_KEY`를 secret으로 저장합니다.
+1. 운영 환경에 32자 이상의 무작위 `CREDENTIAL_ENCRYPTION_KEY`를 secret으로 저장합니다.
 2. 고정 출발 IP를 마련하고 증권사에 등록한 뒤 연결·잔고·시세·주문조회만 먼저 검증합니다.
 3. 최소금액·1주·지정가·정규장 시나리오로 주문/취소/부분체결/완전체결/거부/타임아웃 대사를 검증합니다.
-4. 승인된 운영자만 `LIVE_TRADING_EGRESS_READY=true`와 `LIVE_TRADING_ENABLED=true`를 설정합니다.
-5. 각 사용자는 별도로 위험동의와 한도를 설정해야 하며, 모든 주문은 최종 확인을 거칩니다.
+4. D1이 아닌 PostgreSQL `DATABASE_URL`에서 동시 주문 한도·원장 검증을 통과합니다.
+5. 승인된 운영자만 `TRADING_ENVIRONMENT=production`, `LIVE_MARKET_ENABLED=true`, `LIVE_TRADING_EGRESS_READY=true`, `LIVE_TRADING_ENABLED=true`, `LIVE_ORDER_ROUTING_RELEASED=true`를 설정합니다.
+6. 각 사용자는 별도로 위험동의와 한도를 설정해야 하며, 모든 주문은 최종 확인을 거칩니다.
+
+신규 주문 release gate를 다시 내려도 기존 미체결 주문의 취소와 대사는 계속 가능해야 합니다. 미체결·불확실 주문이 남아 있는 계좌 연결은 자격증명을 삭제할 수 없습니다.
 
 ## 운영 전 필수 보완
 

@@ -26,9 +26,12 @@ Trading Stock System은 주문·계좌·API 자격증명처럼 민감한 금융 
 
 ```dotenv
 LIVE_TRADING_ENABLED=false
+LIVE_ORDER_ROUTING_RELEASED=false
 LIVE_TRADING_EGRESS_READY=false
 LIVE_MARKET_ENABLED=false
 TRADING_ENVIRONMENT=member_certification
+CERTIFICATION_GATEWAY_ENABLED=false
+MATCHING_ENGINE_SINGLE_WRITER=false
 ```
 
 운영자 권한은 첫 로그인 사용자에게 자동 부여하지 않습니다. 인증 제공자가 발급한 사용자 ID를 배포 환경의 `OPERATOR_USER_IDS` allow-list에 명시해야 합니다.

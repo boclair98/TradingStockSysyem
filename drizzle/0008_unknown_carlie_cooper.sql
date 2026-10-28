@@ -1,0 +1,1 @@
+ALTER TABLE `automation_strategies` ADD `commit_token` text;

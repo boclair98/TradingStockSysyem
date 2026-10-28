@@ -1,6 +1,7 @@
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { ensurePaperUser, listBrokerConnections } from "../../../db/trading";
 import { connectKiwoom, connectKoreaInvestment, connectTossInvestment, disconnectLiveBroker } from "../../../engine/liveTradingService";
+import { withDistributedEngineLock } from "../../../engine/distributedLock";
 import type { KisCredentials, KisMode } from "../../../engine/koreaInvestmentClient";
 
 export const dynamic = "force-dynamic";
@@ -44,5 +45,6 @@ export async function DELETE(request: Request) {
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
   const connectionId = new URL(request.url).searchParams.get("id")?.trim() ?? "";
   if (!connectionId) return Response.json({ error: "connection id is required" }, { status: 400 });
-  return Response.json({ disconnected: await disconnectLiveBroker(user.userId, connectionId) }, { headers: { "Cache-Control": "no-store" } });
+  try { return Response.json({ disconnected: await withDistributedEngineLock(() => disconnectLiveBroker(user.userId, connectionId)) }, { headers: { "Cache-Control": "no-store" } }); }
+  catch (error) { return errorResponse(error); }
 }

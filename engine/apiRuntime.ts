@@ -1,7 +1,8 @@
 import { MatchingEngine, type Execution, type Order, type SubmitOrderInput } from "./matchingEngine";
 import { NEXTRADE_INSTRUMENTS } from "./instrumentMaster";
-import { getVenueControl, listOpenOrdersForHydration, type VenueControlState } from "../db/trading";
+import { getLastPaperEngineSequence, savePaperEngineSequence, getVenueControl, listOpenOrdersForHydration, type VenueControlState } from "../db/trading";
 import { withDistributedEngineLock } from "./distributedLock";
+import { bridgePaperEventSource } from "./paperEventBroadcaster";
 
 export interface PaperRuntime {
   engine: MatchingEngine;
@@ -19,7 +20,7 @@ type TradingGlobal = typeof globalThis & {
 const globalRuntime = globalThis as TradingGlobal;
 
 export const getPaperRuntime = (): PaperRuntime => {
-  if (!globalRuntime.__tradingStockSysyemPaperRuntime) {
+  if (!globalRuntime.__tradingStockSysyemPaperRuntime || typeof globalRuntime.__tradingStockSysyemPaperRuntime.engine.restoreSequence !== "function") {
     globalRuntime.__tradingStockSysyemPaperRuntime = {
       engine: new MatchingEngine("CANCEL_TAKER", NEXTRADE_INSTRUMENTS),
       orders: new Map<string, Order>(),
@@ -27,6 +28,7 @@ export const getPaperRuntime = (): PaperRuntime => {
       venueControl: null,
     };
   }
+  bridgePaperEventSource(globalRuntime.__tradingStockSysyemPaperRuntime.engine);
   return globalRuntime.__tradingStockSysyemPaperRuntime;
 };
 
@@ -40,12 +42,13 @@ export async function getHydratedPaperRuntime(): Promise<PaperRuntime> {
         if (!runtime.venueControl) applyVenueControl(await getVenueControl());
         return runtime;
       }
-      const openOrders = await listOpenOrdersForHydration();
+      const [openOrders, lastSequence, venueControl] = await Promise.all([listOpenOrdersForHydration(), getLastPaperEngineSequence(), getVenueControl()]);
+      runtime.engine.restoreSequence(lastSequence);
       for (const order of openOrders) {
         runtime.engine.restoreOpenOrder(order);
         runtime.orders.set(order.id, order);
       }
-      runtime.venueControl = await getVenueControl();
+      runtime.venueControl = venueControl;
       runtime.engine.setMarketPhase(runtime.venueControl.haltMode === "OPEN" ? runtime.venueControl.phase : "CLOSED");
       return runtime;
     })().catch((error) => {
@@ -54,6 +57,16 @@ export async function getHydratedPaperRuntime(): Promise<PaperRuntime> {
     });
   }
   return hydrationPromise;
+}
+
+async function reloadHydratedPaperRuntime() {
+  globalRuntime.__tradingStockSysyemPaperRuntime = undefined;
+  hydrationPromise = null;
+  return getHydratedPaperRuntime();
+}
+
+export function paperEngineWritesAvailable() {
+  return Boolean(process.env.DATABASE_URL) && process.env.MATCHING_ENGINE_SINGLE_WRITER === "true";
 }
 
 export function applyVenueControl(state: VenueControlState) {
@@ -86,6 +99,15 @@ export async function withTradingMutationLock<T>(task: () => Promise<T>): Promis
   } finally {
     release();
   }
+}
+
+export async function withPaperEngineMutationLock<T>(task: () => Promise<T>): Promise<T> {
+  if (!paperEngineWritesAvailable()) throw new Error("paper matching writes require PostgreSQL serialization");
+  return withTradingMutationLock(async () => {
+    const runtime = await reloadHydratedPaperRuntime();
+    try { return await task(); }
+    finally { await savePaperEngineSequence(runtime.engine.sequenceNumber); }
+  });
 }
 
 export function submitPaperOrder(input: SubmitOrderInput) {

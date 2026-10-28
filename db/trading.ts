@@ -31,22 +31,28 @@ const commonSchema = [
   `CREATE TABLE IF NOT EXISTS paper_executions (id TEXT PRIMARY KEY, engine_execution_id TEXT NOT NULL, symbol TEXT NOT NULL, price INTEGER NOT NULL, quantity INTEGER NOT NULL, buy_order_id TEXT NOT NULL, sell_order_id TEXT NOT NULL, buy_user_id TEXT NOT NULL, sell_user_id TEXT NOT NULL, executed_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS order_idempotency (user_id TEXT NOT NULL, idempotency_key TEXT NOT NULL, request_hash TEXT NOT NULL, status_code INTEGER NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, idempotency_key))`,
   `CREATE TABLE IF NOT EXISTS venue_control (venue TEXT PRIMARY KEY, phase TEXT NOT NULL, halt_mode TEXT NOT NULL DEFAULT 'OPEN', reason TEXT, version INTEGER NOT NULL DEFAULT 1, updated_by TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS engine_runtime_state (venue TEXT PRIMARY KEY, last_sequence BIGINT NOT NULL DEFAULT 0, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS paper_simulation_accounts (user_id TEXT PRIMARY KEY REFERENCES users(id), state_json TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, commit_token TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS paper_simulation_commands (user_id TEXT NOT NULL REFERENCES users(id), command_id TEXT NOT NULL, request_hash TEXT NOT NULL, response_json TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (user_id, command_id))`,
   `CREATE TABLE IF NOT EXISTS audit_chain (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, previous_hash TEXT NOT NULL, entry_hash TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS audit_chain_heads (user_id TEXT PRIMARY KEY, entry_hash TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS broker_connections (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), provider TEXT NOT NULL, mode TEXT NOT NULL DEFAULT 'sandbox', account_label TEXT NOT NULL, account_ref TEXT NOT NULL, credential_ciphertext TEXT, status TEXT NOT NULL DEFAULT 'pending', last_checked_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS automation_strategies (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT, name TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, strategy_type TEXT NOT NULL, trigger_operator TEXT NOT NULL, trigger_price INTEGER, order_type TEXT NOT NULL, limit_price INTEGER, quantity INTEGER NOT NULL, interval_seconds INTEGER NOT NULL DEFAULT 60, max_orders_per_day INTEGER NOT NULL DEFAULT 1, max_daily_notional INTEGER NOT NULL DEFAULT 1000000, status TEXT NOT NULL DEFAULT 'draft', execution_mode TEXT NOT NULL DEFAULT 'paper', last_evaluated_at TEXT, last_triggered_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS automation_strategies (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT, name TEXT NOT NULL, symbol TEXT NOT NULL, side TEXT NOT NULL, strategy_type TEXT NOT NULL, trigger_operator TEXT NOT NULL, trigger_price INTEGER, order_type TEXT NOT NULL, limit_price INTEGER, quantity INTEGER NOT NULL, interval_seconds INTEGER NOT NULL DEFAULT 60, max_orders_per_day INTEGER NOT NULL DEFAULT 1, max_daily_notional INTEGER NOT NULL DEFAULT 1000000, status TEXT NOT NULL DEFAULT 'draft', execution_mode TEXT NOT NULL DEFAULT 'paper', last_evaluated_at TEXT, last_triggered_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, commit_token TEXT)`,
   `CREATE TABLE IF NOT EXISTS automation_runs (id TEXT PRIMARY KEY, strategy_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL, observed_price INTEGER, order_id TEXT, detail_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS automation_validation_progress (user_id TEXT NOT NULL, strategy_id TEXT NOT NULL, strategy_fingerprint TEXT NOT NULL, validation_count INTEGER NOT NULL DEFAULT 0, trigger_count INTEGER NOT NULL DEFAULT 0, waiting_count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY (user_id, strategy_id, strategy_fingerprint))`,
   `CREATE TABLE IF NOT EXISTS broker_rate_windows (provider TEXT NOT NULL, connection_id TEXT NOT NULL, rate_group TEXT NOT NULL, window_started_at INTEGER NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (provider, connection_id, rate_group))`,
   `CREATE TABLE IF NOT EXISTS member_gateway_sessions (session_id TEXT PRIMARY KEY, member_id TEXT NOT NULL, protocol TEXT NOT NULL DEFAULT 'NATIVE_JSON_1', status TEXT NOT NULL DEFAULT 'ACTIVE', expected_inbound_sequence INTEGER NOT NULL DEFAULT 1, outbound_sequence INTEGER NOT NULL DEFAULT 1, remote_address TEXT, connected_at TEXT NOT NULL, last_heartbeat_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS gateway_messages (id TEXT PRIMARY KEY, member_id TEXT NOT NULL, session_id TEXT NOT NULL, direction TEXT NOT NULL, message_type TEXT NOT NULL, session_sequence INTEGER NOT NULL, market_sequence INTEGER, client_order_id TEXT, venue_order_id TEXT, status TEXT NOT NULL, reject_code TEXT, payload_json TEXT NOT NULL, received_at TEXT NOT NULL, processed_at TEXT, latency_micros INTEGER)`,
   `CREATE TABLE IF NOT EXISTS drop_copy_events (id TEXT PRIMARY KEY, member_id TEXT NOT NULL, market_sequence INTEGER NOT NULL, event_type TEXT NOT NULL, order_id TEXT, execution_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS broker_tokens (connection_id TEXT PRIMARY KEY, token_ciphertext TEXT NOT NULL, expires_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS live_risk_policies (user_id TEXT PRIMARY KEY REFERENCES users(id), live_enabled INTEGER NOT NULL DEFAULT 0, automation_enabled INTEGER NOT NULL DEFAULT 0, kill_switch INTEGER NOT NULL DEFAULT 1, max_order_quantity INTEGER NOT NULL DEFAULT 10, max_order_notional INTEGER NOT NULL DEFAULT 1000000, max_daily_notional INTEGER NOT NULL DEFAULT 5000000, max_open_orders INTEGER NOT NULL DEFAULT 5, allowed_symbols_json TEXT NOT NULL DEFAULT '[]', acknowledged_at TEXT, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_risk_policies (user_id TEXT PRIMARY KEY REFERENCES users(id), live_enabled INTEGER NOT NULL DEFAULT 0, automation_enabled INTEGER NOT NULL DEFAULT 0, kill_switch INTEGER NOT NULL DEFAULT 1, max_order_quantity INTEGER NOT NULL DEFAULT 10, max_order_notional INTEGER NOT NULL DEFAULT 1000000, max_daily_notional INTEGER NOT NULL DEFAULT 5000000, max_open_orders INTEGER NOT NULL DEFAULT 5, allowed_symbols_json TEXT NOT NULL DEFAULT '[]', acknowledged_at TEXT, updated_at TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, commit_token TEXT)`,
   `CREATE TABLE IF NOT EXISTS live_order_previews (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT NOT NULL, request_hash TEXT NOT NULL, request_json TEXT NOT NULL, quote_price INTEGER NOT NULL, estimated_notional INTEGER NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT, created_at TEXT NOT NULL)`,
-  `CREATE TABLE IF NOT EXISTS live_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT NOT NULL, client_order_id TEXT NOT NULL, broker_order_id TEXT, broker_org_no TEXT, symbol TEXT NOT NULL, side TEXT NOT NULL, order_type TEXT NOT NULL, time_in_force TEXT NOT NULL, venue TEXT NOT NULL, price INTEGER, quantity INTEGER NOT NULL, executed_quantity INTEGER NOT NULL DEFAULT 0, average_price INTEGER, status TEXT NOT NULL, broker_code TEXT, broker_message TEXT, submitted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS live_orders (id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), connection_id TEXT NOT NULL, client_order_id TEXT NOT NULL, broker_order_id TEXT, broker_org_no TEXT, symbol TEXT NOT NULL, side TEXT NOT NULL, order_type TEXT NOT NULL, time_in_force TEXT NOT NULL, venue TEXT NOT NULL, price INTEGER, quantity INTEGER NOT NULL, executed_quantity INTEGER NOT NULL DEFAULT 0, average_price INTEGER, risk_notional INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL, broker_code TEXT, broker_message TEXT, submitted_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
   `CREATE TABLE IF NOT EXISTS live_executions (id TEXT PRIMARY KEY, live_order_id TEXT NOT NULL, execution_ref TEXT NOT NULL, price INTEGER NOT NULL, quantity INTEGER NOT NULL, venue TEXT NOT NULL, executed_at TEXT NOT NULL)`,
 ];
 
 const indexes = [
+  `CREATE INDEX IF NOT EXISTS idx_paper_simulation_commands_time ON paper_simulation_commands(user_id, created_at)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_paper_accounts_participant_id ON paper_accounts(participant_id)`,
   `CREATE INDEX IF NOT EXISTS idx_paper_orders_user_updated ON paper_orders(user_id, updated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_paper_orders_symbol_status ON paper_orders(symbol, status)`,
@@ -56,6 +62,7 @@ const indexes = [
   `CREATE INDEX IF NOT EXISTS idx_paper_executions_symbol_time ON paper_executions(symbol, executed_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_user_time ON audit_log(user_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_chain_user_time ON audit_chain(user_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_chain_user_previous_hash ON audit_chain(user_id, previous_hash)`,
   `CREATE INDEX IF NOT EXISTS idx_idempotency_created_at ON order_idempotency(created_at)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_single_operator ON users(role) WHERE role='operator'`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_broker_connections_user_provider_account ON broker_connections(user_id, provider, account_ref)`,
@@ -64,6 +71,7 @@ const indexes = [
   `CREATE INDEX IF NOT EXISTS idx_automation_strategies_due ON automation_strategies(status, last_evaluated_at)`,
   `CREATE INDEX IF NOT EXISTS idx_automation_runs_strategy_time ON automation_runs(strategy_id, created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_automation_runs_user_time ON automation_runs(user_id, created_at)`,
+  `CREATE INDEX IF NOT EXISTS idx_automation_progress_user_strategy ON automation_validation_progress(user_id, strategy_id)`,
   `CREATE INDEX IF NOT EXISTS idx_gateway_sessions_member_status ON member_gateway_sessions(member_id, status)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_gateway_message_session_sequence ON gateway_messages(session_id, direction, session_sequence)`,
   `CREATE INDEX IF NOT EXISTS idx_gateway_message_member_clordid ON gateway_messages(member_id, client_order_id)`,
@@ -132,6 +140,26 @@ async function getAdapter() {
   return adapterPromise;
 }
 
+/** Test-only seam for exercising the persistence layer against a transactional SQLite adapter. */
+export function __setTradingDatabaseAdapterForTests(adapter: DatabaseAdapter | null) {
+  adapterPromise = adapter ? Promise.resolve(adapter) : null;
+  schemaReady = null;
+}
+
+async function ensureCompatibilityColumns(db: DatabaseAdapter, table: string, definitions: Array<{ name: string; sql: string }>) {
+  const readColumns = () => db.kind === "postgres"
+    ? db.query<{ name: string }>(`SELECT column_name AS "name" FROM information_schema.columns WHERE table_schema='public' AND table_name=?`, [table])
+    : db.query<{ name: string }>(`PRAGMA table_info(${table})`);
+  for (const definition of definitions) {
+    if ((await readColumns()).rows.some((column) => column.name === definition.name)) continue;
+    try {
+      await db.query(definition.sql);
+    } catch (error) {
+      if (!(await readColumns()).rows.some((column) => column.name === definition.name)) throw error;
+    }
+  }
+}
+
 export async function getTradingDb() {
   await ensureTradingSchema();
   return getAdapter();
@@ -152,6 +180,20 @@ export async function ensureTradingSchema() {
         ? `CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`
         : `CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL, action TEXT NOT NULL, entity_id TEXT, payload_json TEXT NOT NULL, created_at TEXT NOT NULL)`;
       await db.batch([...commonSchema, auditSql, ...indexes].map((sql) => ({ sql })));
+      await ensureCompatibilityColumns(db, "automation_strategies", [
+        { name: "version", sql: `ALTER TABLE automation_strategies ADD COLUMN version INTEGER NOT NULL DEFAULT 1` },
+        { name: "commit_token", sql: `ALTER TABLE automation_strategies ADD COLUMN commit_token TEXT` },
+      ]);
+      await ensureCompatibilityColumns(db, "live_risk_policies", [
+        { name: "version", sql: `ALTER TABLE live_risk_policies ADD COLUMN version INTEGER NOT NULL DEFAULT 1` },
+        { name: "commit_token", sql: `ALTER TABLE live_risk_policies ADD COLUMN commit_token TEXT` },
+      ]);
+      await ensureCompatibilityColumns(db, "live_orders", [
+        { name: "risk_notional", sql: `ALTER TABLE live_orders ADD COLUMN risk_notional INTEGER NOT NULL DEFAULT 0` },
+      ]);
+      await db.query(`INSERT INTO audit_chain_heads (user_id, entry_hash, updated_at) SELECT leaf.user_id, leaf.entry_hash, leaf.created_at FROM audit_chain leaf WHERE NOT EXISTS (SELECT 1 FROM audit_chain child WHERE child.user_id=leaf.user_id AND child.previous_hash=leaf.entry_hash) AND (SELECT COUNT(*) FROM audit_chain candidate WHERE candidate.user_id=leaf.user_id AND NOT EXISTS (SELECT 1 FROM audit_chain child_of_candidate WHERE child_of_candidate.user_id=candidate.user_id AND child_of_candidate.previous_hash=candidate.entry_hash))=1 ON CONFLICT(user_id) DO NOTHING`);
+      const forkedAuditUser = (await db.query<{ userId: string }>(`SELECT candidate.user_id AS "userId" FROM audit_chain candidate WHERE NOT EXISTS (SELECT 1 FROM audit_chain child WHERE child.user_id=candidate.user_id AND child.previous_hash=candidate.entry_hash) GROUP BY candidate.user_id HAVING COUNT(*)>1 LIMIT 1`)).rows[0];
+      if (forkedAuditUser) throw new Error("audit chain has multiple leaves; database writes are disabled until integrity is restored");
       await db.query(`INSERT INTO venue_control (venue, phase, halt_mode, reason, version, updated_by, updated_at) VALUES ('NEXTRADE', 'CONTINUOUS', 'OPEN', NULL, 1, 'SYSTEM', ?) ON CONFLICT(venue) DO NOTHING`, [new Date().toISOString()]);
       if (db.kind === "d1") await db.query("PRAGMA optimize");
     })().catch((error) => {
@@ -171,6 +213,7 @@ async function participantIdFor(userId: string) {
 export async function ensurePaperUser(user: ChatGPTUser) {
   await ensureTradingSchema();
   const db = await getAdapter();
+  if (!(await ensureAuditHead(db, user.userId))) throw new Error("audit chain has multiple leaves; writes are disabled until integrity is restored");
   const now = new Date().toISOString();
   const participantId = await participantIdFor(user.userId);
   await db.batch([
@@ -217,10 +260,39 @@ export async function preTradeRiskCheck(userId: string, side: "BUY" | "SELL", sy
   return null;
 }
 
+type ReplaceRiskOrder = Pick<Order, "side" | "symbol" | "price" | "quantity" | "remaining">;
+
+export function paperReplaceRiskReason(account: PaperAccountView, current: ReplaceRiskOrder, desiredQuantity: number, replacementPrice: number | null) {
+  const filledQuantity = current.quantity - current.remaining;
+  if (!Number.isSafeInteger(desiredQuantity) || desiredQuantity <= filledQuantity) return "교체 주문 총수량은 이미 체결된 수량보다 커야 합니다";
+  const replacementQuantity = desiredQuantity - filledQuantity;
+
+  if (current.side === "BUY") {
+    if (!Number.isSafeInteger(replacementPrice) || (replacementPrice ?? 0) <= 0) return "교체 주문의 위험 계산 가격을 확인할 수 없습니다";
+    const oldReservation = current.price == null ? 0 : current.price * current.remaining;
+    const replacementNotional = (replacementPrice as number) * replacementQuantity;
+    const cashAfterOldReservationRelease = account.availableCash + oldReservation;
+    if (!Number.isSafeInteger(oldReservation) || !Number.isSafeInteger(replacementNotional) || replacementNotional > cashAfterOldReservationRelease) return "모의 예수금이 부족합니다";
+  } else {
+    const position = account.positions.find((item) => item.symbol === current.symbol);
+    const quantityAfterOldReservationRelease = (position?.availableQuantity ?? 0) + current.remaining;
+    if (replacementQuantity > quantityAfterOldReservationRelease) return "매도 가능 수량이 부족합니다";
+  }
+  return null;
+}
+
+export async function preTradeReplaceRiskCheck(userId: string, current: ReplaceRiskOrder, desiredQuantity: number, replacementPrice: number | null) {
+  return paperReplaceRiskReason(await getPaperAccount(userId), current, desiredQuantity, replacementPrice);
+}
+
 export async function savePaperOrder(userId: string, order: Order) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  await db.query(`INSERT INTO paper_orders (id, user_id, participant_id, symbol, side, order_type, time_in_force, price, stop_price, quantity, remaining, status, sequence, accepted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET remaining=excluded.remaining, status=excluded.status, sequence=excluded.sequence, updated_at=excluded.updated_at`, [order.id, userId, order.participantId, order.symbol, order.side, order.type, order.timeInForce, order.price, order.stopPrice ?? null, order.quantity, order.remaining, order.status, order.sequence, order.acceptedAt, order.lastUpdatedAt]);
+  const saved = await db.query(`INSERT INTO paper_orders (id, user_id, participant_id, symbol, side, order_type, time_in_force, price, stop_price, quantity, remaining, status, sequence, accepted_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET remaining=excluded.remaining, status=excluded.status, sequence=excluded.sequence, updated_at=excluded.updated_at WHERE paper_orders.user_id=excluded.user_id AND paper_orders.participant_id=excluded.participant_id`, [order.id, userId, order.participantId, order.symbol, order.side, order.type, order.timeInForce, order.price, order.stopPrice ?? null, order.quantity, order.remaining, order.status, order.sequence, order.acceptedAt, order.lastUpdatedAt]);
+  if (saved.changes === 0) {
+    const owner = await ownerForOrder(order.id);
+    if (owner && owner.userId !== userId) throw new Error("paper order ownership conflict");
+  }
 }
 
 export async function ownerForOrder(orderId: string) {
@@ -247,18 +319,85 @@ export async function saveExecution(execution: Execution) {
   ]);
 }
 
+async function getAuditHeadRecord(db: DatabaseAdapter, userId: string) {
+  return (await db.query<{ entryHash: string; versionToken: string }>(`SELECT entry_hash AS "entryHash", updated_at AS "versionToken" FROM audit_chain_heads WHERE user_id=?`, [userId])).rows[0] ?? null;
+}
+
+async function ensureAuditHead(db: DatabaseAdapter, userId: string) {
+  const existing = await getAuditHeadRecord(db, userId);
+  if (existing) return existing;
+  const leaves = await db.query<{ entryHash: string }>(`SELECT candidate.entry_hash AS "entryHash" FROM audit_chain candidate WHERE candidate.user_id=? AND NOT EXISTS (SELECT 1 FROM audit_chain child WHERE child.user_id=candidate.user_id AND child.previous_hash=candidate.entry_hash) LIMIT 2`, [userId]);
+  if (leaves.rows.length > 1) return null;
+  const entryHash = leaves.rows[0]?.entryHash ?? "GENESIS";
+  await db.query(`INSERT INTO audit_chain_heads (user_id, entry_hash, updated_at) VALUES (?, ?, ?) ON CONFLICT(user_id) DO NOTHING`, [userId, entryHash, crypto.randomUUID()]);
+  return getAuditHeadRecord(db, userId);
+}
+
 export async function addAudit(userId: string, action: string, entityId: string | null, payload: unknown) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const createdAt = new Date().toISOString();
   const payloadJson = JSON.stringify(payload);
-  const previousHash = (await db.query<{ entryHash: string }>(`SELECT entry_hash AS "entryHash" FROM audit_chain WHERE user_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, [userId])).rows[0]?.entryHash ?? "GENESIS";
-  const entryHash = await computeAuditEntryHash(previousHash, userId, action, entityId, payloadJson, createdAt);
-  const id = `AUD-${Date.now()}-${crypto.randomUUID()}`;
-  await db.batch([
-    { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) VALUES (?, ?, ?, ?, ?)`, params: [userId, action, entityId, payloadJson, createdAt] },
-    { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, params: [id, userId, action, entityId, payloadJson, previousHash, entryHash, createdAt] },
-  ]);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const head = await ensureAuditHead(db, userId);
+    if (!head) throw new Error("audit chain has multiple leaves");
+    const createdAt = new Date().toISOString();
+    const previousHash = head.entryHash;
+    const commitToken = crypto.randomUUID();
+    const entryHash = await computeAuditEntryHash(previousHash, userId, action, entityId, payloadJson, createdAt);
+    const id = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+    await db.batch([
+      { sql: `UPDATE audit_chain_heads SET entry_hash=?, updated_at=? WHERE user_id=? AND entry_hash=? AND updated_at=?`, params: [entryHash, commitToken, userId, previousHash, head.versionToken] },
+      { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [userId, action, entityId, payloadJson, createdAt, userId, entryHash, commitToken] },
+      { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [id, userId, action, entityId, payloadJson, previousHash, entryHash, createdAt, userId, entryHash, commitToken] },
+    ]);
+    if ((await db.query<{ id: string }>(`SELECT id FROM audit_chain WHERE id=?`, [id])).rows[0]) return;
+    if (attempt === 2) throw new Error("audit chain head changed repeatedly");
+  }
+}
+
+export type LiveRiskPolicyMutation = {
+  liveEnabled: boolean;
+  automationEnabled: boolean;
+  killSwitch: boolean;
+  maxOrderQuantity: number;
+  maxOrderNotional: number;
+  maxDailyNotional: number;
+  maxOpenOrders: number;
+  allowedSymbols: string[];
+  acknowledgedAt: string | null;
+};
+
+export async function commitLiveRiskPolicyChange(input: { userId: string; expectedVersion: number; policy: LiveRiskPolicyMutation; auditPayload: Record<string, unknown> }) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const action = "LIVE_RISK_POLICY_UPDATED";
+  const payloadJson = JSON.stringify({ ...input.auditPayload, policyVersion: input.expectedVersion + 1 });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const head = await ensureAuditHead(db, input.userId);
+    if (!head) throw new Error("audit chain has multiple leaves");
+    const changedAt = new Date().toISOString();
+    const commitToken = crypto.randomUUID();
+    const entryHash = await computeAuditEntryHash(head.entryHash, input.userId, action, null, payloadJson, changedAt);
+    const auditId = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+    try {
+      await db.batch([
+        { sql: `UPDATE live_risk_policies SET live_enabled=?, automation_enabled=?, kill_switch=?, max_order_quantity=?, max_order_notional=?, max_daily_notional=?, max_open_orders=?, allowed_symbols_json=?, acknowledged_at=?, updated_at=?, version=version+1, commit_token=? WHERE user_id=? AND version=? AND EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.policy.liveEnabled ? 1 : 0, input.policy.automationEnabled ? 1 : 0, input.policy.killSwitch ? 1 : 0, input.policy.maxOrderQuantity, input.policy.maxOrderNotional, input.policy.maxDailyNotional, input.policy.maxOpenOrders, JSON.stringify(input.policy.allowedSymbols), input.policy.acknowledgedAt, changedAt, commitToken, input.userId, input.expectedVersion, input.userId, head.entryHash, head.versionToken] },
+        { sql: `UPDATE audit_chain_heads SET entry_hash=?, updated_at=? WHERE user_id=? AND entry_hash=? AND updated_at=? AND EXISTS (SELECT 1 FROM live_risk_policies WHERE user_id=? AND version=? AND commit_token=?)`, params: [entryHash, commitToken, input.userId, head.entryHash, head.versionToken, input.userId, input.expectedVersion + 1, commitToken] },
+        { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) SELECT ?, ?, NULL, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM live_risk_policies WHERE user_id=? AND version=? AND commit_token=?)`, params: [input.userId, action, payloadJson, changedAt, input.userId, entryHash, commitToken, input.userId, input.expectedVersion + 1, commitToken] },
+        // A failed version/head CAS makes user_id NULL and rolls back the whole batch.
+        { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) VALUES (?, (SELECT ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM live_risk_policies WHERE user_id=? AND version=? AND commit_token=?)), ?, NULL, ?, ?, ?, ?)`, params: [auditId, input.userId, input.userId, entryHash, commitToken, input.userId, input.expectedVersion + 1, commitToken, action, payloadJson, head.entryHash, entryHash, changedAt] },
+      ]);
+    } catch {
+      const current = (await db.query<{ version: number }>(`SELECT version FROM live_risk_policies WHERE user_id=?`, [input.userId])).rows[0];
+      if (!current || Number(current.version) !== input.expectedVersion) return { committed: false as const, reason: "conflict" as const };
+      if (attempt === 2) return { committed: false as const, reason: "contention" as const };
+      continue;
+    }
+    const current = (await db.query<{ version: number; commitToken: string | null }>(`SELECT version, commit_token AS "commitToken" FROM live_risk_policies WHERE user_id=?`, [input.userId])).rows[0];
+    const auditCommitted = Boolean((await db.query<{ id: string }>(`SELECT id FROM audit_chain WHERE id=?`, [auditId])).rows[0]);
+    if (auditCommitted && Number(current?.version) === input.expectedVersion + 1 && current?.commitToken === commitToken) return { committed: true as const, reason: null };
+  }
+  return { committed: false as const, reason: "contention" as const };
 }
 
 export async function listUserTradingState(userId: string) {
@@ -328,14 +467,45 @@ export async function saveIdempotencyRecord(userId: string, key: string, request
 export async function verifyAuditChain(userId: string) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const rows = await db.query<{ id: string; action: string; entityId: string | null; payloadJson: string; previousHash: string; entryHash: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", previous_hash AS "previousHash", entry_hash AS "entryHash", created_at AS "createdAt" FROM audit_chain WHERE user_id=? ORDER BY created_at ASC, id ASC LIMIT 2000`, [userId]);
+  const rows = await db.query<{ id: string; action: string; entityId: string | null; payloadJson: string; previousHash: string; entryHash: string; createdAt: string }>(`SELECT id, action, entity_id AS "entityId", payload_json AS "payloadJson", previous_hash AS "previousHash", entry_hash AS "entryHash", created_at AS "createdAt" FROM audit_chain WHERE user_id=? ORDER BY created_at ASC, id ASC LIMIT 2001`, [userId]);
+  const truncated = rows.rows.length > 2000;
+  const sample = rows.rows.slice(0, 2000);
+  const childByPrevious = new Map<string, (typeof sample)[number]>();
+  for (const row of sample) {
+    if (childByPrevious.has(row.previousHash)) return { ok: false, complete: !truncated, checked: sample.length, failedAt: row.id };
+    childByPrevious.set(row.previousHash, row);
+  }
   let previousHash = "GENESIS";
-  for (const row of rows.rows) {
+  const visited = new Set<string>();
+  while (childByPrevious.has(previousHash)) {
+    const row = childByPrevious.get(previousHash)!;
+    if (visited.has(row.id)) return { ok: false, complete: !truncated, checked: sample.length, failedAt: row.id };
     const expected = await computeAuditEntryHash(previousHash, userId, row.action, row.entityId, row.payloadJson, row.createdAt);
-    if (row.previousHash !== previousHash || row.entryHash !== expected) return { ok: false, checked: rows.rows.length, failedAt: row.id };
+    if (row.entryHash !== expected) return { ok: false, complete: !truncated, checked: sample.length, failedAt: row.id };
+    visited.add(row.id);
     previousHash = row.entryHash;
   }
-  return { ok: true, checked: rows.rows.length, head: previousHash };
+  if (visited.size !== sample.length) return { ok: false, complete: !truncated, checked: sample.length, failedAt: "DISCONNECTED_CHAIN" };
+  if (truncated) return { ok: true, complete: false, checked: sample.length, head: previousHash };
+  const storedHead = await getAuditHeadRecord(db, userId);
+  if (!storedHead || storedHead.entryHash !== previousHash) return { ok: false, complete: true, checked: sample.length, failedAt: "AUDIT_HEAD" };
+  return { ok: true, complete: true, checked: sample.length, head: previousHash };
+}
+
+export async function getLastPaperEngineSequence() {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const row = (await db.query<{ sequence: number | string }>(`SELECT CASE WHEN COALESCE((SELECT last_sequence FROM engine_runtime_state WHERE venue='NEXTRADE'), 0) > COALESCE((SELECT MAX(sequence) FROM paper_orders), 0) THEN COALESCE((SELECT last_sequence FROM engine_runtime_state WHERE venue='NEXTRADE'), 0) ELSE COALESCE((SELECT MAX(sequence) FROM paper_orders), 0) END AS sequence`)).rows[0];
+  return Number(row?.sequence ?? 0);
+}
+
+/** Persists the monotonic engine high-water mark, including rejected/cancel/replace events. */
+export async function savePaperEngineSequence(sequence: number) {
+  if (!Number.isSafeInteger(sequence) || sequence < 0) throw new Error("engine sequence must be a non-negative safe integer");
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const now = new Date().toISOString();
+  await db.query(`INSERT INTO engine_runtime_state (venue, last_sequence, updated_at) VALUES ('NEXTRADE', ?, ?) ON CONFLICT(venue) DO UPDATE SET last_sequence=CASE WHEN engine_runtime_state.last_sequence < excluded.last_sequence THEN excluded.last_sequence ELSE engine_runtime_state.last_sequence END, updated_at=CASE WHEN engine_runtime_state.last_sequence < excluded.last_sequence THEN excluded.updated_at ELSE engine_runtime_state.updated_at END`, [sequence, now]);
 }
 
 export async function computeAuditEntryHash(previousHash: string, userId: string, action: string, entityId: string | null, payloadJson: string, createdAt: string) {
@@ -388,7 +558,7 @@ export async function saveBrokerConnection(input: { id: string; userId: string; 
 export async function deleteBrokerConnection(userId: string, connectionId: string) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  await db.query(`UPDATE automation_strategies SET status='paused', updated_at=? WHERE user_id=? AND connection_id=? AND status='armed'`, [new Date().toISOString(), userId, connectionId]);
+  await db.query(`UPDATE automation_strategies SET status='paused', updated_at=?, version=version+1, commit_token=NULL WHERE user_id=? AND connection_id=? AND status IN ('armed','ready')`, [new Date().toISOString(), userId, connectionId]);
   return (await db.query(`DELETE FROM broker_connections WHERE id=? AND user_id=?`, [connectionId, userId])).changes === 1;
 }
 
@@ -407,35 +577,124 @@ export type AutomationStrategyView = {
   intervalSeconds: number;
   maxOrdersPerDay: number;
   maxDailyNotional: number;
-  status: "draft" | "armed" | "paused" | "stopped";
+  status: "draft" | "ready" | "armed" | "paused" | "stopped";
   executionMode: "paper" | "sandbox" | "production";
   lastEvaluatedAt: string | null;
   lastTriggeredAt: string | null;
   createdAt: string;
   updatedAt: string;
+  version: number;
 };
+
+function normalizeAutomationStrategyRow(row: AutomationStrategyView): AutomationStrategyView {
+  return { ...row, triggerPrice: row.triggerPrice == null ? null : Number(row.triggerPrice), limitPrice: row.limitPrice == null ? null : Number(row.limitPrice), quantity: Number(row.quantity), intervalSeconds: Number(row.intervalSeconds), maxOrdersPerDay: Number(row.maxOrdersPerDay), maxDailyNotional: Number(row.maxDailyNotional), version: Number(row.version) };
+}
 
 export async function listAutomationStrategies(userId: string): Promise<AutomationStrategyView[]> {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const rows = await db.query<AutomationStrategyView>(`SELECT id, connection_id AS "connectionId", name, symbol, side, strategy_type AS "strategyType", trigger_operator AS "triggerOperator", trigger_price AS "triggerPrice", order_type AS "orderType", limit_price AS "limitPrice", quantity, interval_seconds AS "intervalSeconds", max_orders_per_day AS "maxOrdersPerDay", max_daily_notional AS "maxDailyNotional", status, execution_mode AS "executionMode", last_evaluated_at AS "lastEvaluatedAt", last_triggered_at AS "lastTriggeredAt", created_at AS "createdAt", updated_at AS "updatedAt" FROM automation_strategies WHERE user_id=? ORDER BY created_at DESC`, [userId]);
-  return rows.rows.map((row) => ({ ...row, triggerPrice: row.triggerPrice == null ? null : Number(row.triggerPrice), limitPrice: row.limitPrice == null ? null : Number(row.limitPrice), quantity: Number(row.quantity), intervalSeconds: Number(row.intervalSeconds), maxOrdersPerDay: Number(row.maxOrdersPerDay), maxDailyNotional: Number(row.maxDailyNotional) }));
+  const rows = await db.query<AutomationStrategyView>(`SELECT id, connection_id AS "connectionId", name, symbol, side, strategy_type AS "strategyType", trigger_operator AS "triggerOperator", trigger_price AS "triggerPrice", order_type AS "orderType", limit_price AS "limitPrice", quantity, interval_seconds AS "intervalSeconds", max_orders_per_day AS "maxOrdersPerDay", max_daily_notional AS "maxDailyNotional", status, execution_mode AS "executionMode", last_evaluated_at AS "lastEvaluatedAt", last_triggered_at AS "lastTriggeredAt", created_at AS "createdAt", updated_at AS "updatedAt", version FROM automation_strategies WHERE user_id=? ORDER BY created_at DESC LIMIT 50`, [userId]);
+  return rows.rows.map(normalizeAutomationStrategyRow);
 }
 
-export async function saveAutomationStrategy(userId: string, input: Omit<AutomationStrategyView, "lastEvaluatedAt" | "lastTriggeredAt" | "createdAt" | "updatedAt">) {
+export type AutomationStrategyDraft = Omit<AutomationStrategyView, "lastEvaluatedAt" | "lastTriggeredAt" | "createdAt" | "updatedAt" | "version" | "status" | "executionMode">;
+
+export async function getAutomationStrategy(userId: string, strategyId: string) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const now = new Date().toISOString();
-  await db.query(`INSERT INTO automation_strategies (id, user_id, connection_id, name, symbol, side, strategy_type, trigger_operator, trigger_price, order_type, limit_price, quantity, interval_seconds, max_orders_per_day, max_daily_notional, status, execution_mode, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET connection_id=excluded.connection_id, name=excluded.name, symbol=excluded.symbol, side=excluded.side, strategy_type=excluded.strategy_type, trigger_operator=excluded.trigger_operator, trigger_price=excluded.trigger_price, order_type=excluded.order_type, limit_price=excluded.limit_price, quantity=excluded.quantity, interval_seconds=excluded.interval_seconds, max_orders_per_day=excluded.max_orders_per_day, max_daily_notional=excluded.max_daily_notional, status=excluded.status, execution_mode=excluded.execution_mode, updated_at=excluded.updated_at WHERE automation_strategies.user_id=?`, [input.id, userId, input.connectionId, input.name, input.symbol, input.side, input.strategyType, input.triggerOperator, input.triggerPrice, input.orderType, input.limitPrice, input.quantity, input.intervalSeconds, input.maxOrdersPerDay, input.maxDailyNotional, input.status, input.executionMode, now, now, userId]);
-  return (await listAutomationStrategies(userId)).find((item) => item.id === input.id) ?? null;
+  const row = (await db.query<AutomationStrategyView>(`SELECT id, connection_id AS "connectionId", name, symbol, side, strategy_type AS "strategyType", trigger_operator AS "triggerOperator", trigger_price AS "triggerPrice", order_type AS "orderType", limit_price AS "limitPrice", quantity, interval_seconds AS "intervalSeconds", max_orders_per_day AS "maxOrdersPerDay", max_daily_notional AS "maxDailyNotional", status, execution_mode AS "executionMode", last_evaluated_at AS "lastEvaluatedAt", last_triggered_at AS "lastTriggeredAt", created_at AS "createdAt", updated_at AS "updatedAt", version FROM automation_strategies WHERE user_id=? AND id=? LIMIT 1`, [userId, strategyId])).rows[0];
+  return row ? normalizeAutomationStrategyRow(row) : null;
 }
 
-export async function updateAutomationStrategyStatus(userId: string, strategyId: string, status: AutomationStrategyView["status"]) {
+export async function countAutomationStrategies(userId: string) {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const changed = await db.query(`UPDATE automation_strategies SET status=?, updated_at=? WHERE id=? AND user_id=?`, [status, new Date().toISOString(), strategyId, userId]);
-  if (changed.changes !== 1) return null;
-  return (await listAutomationStrategies(userId)).find((item) => item.id === strategyId) ?? null;
+  const row = (await db.query<{ count: number }>(`SELECT COUNT(*) AS count FROM automation_strategies WHERE user_id=?`, [userId])).rows[0];
+  return Number(row?.count ?? 0);
+}
+
+type AutomationStrategyCommitResult = { strategy: AutomationStrategyView | null; reason: "conflict" | "quota" | "contention" | null };
+
+export async function commitAutomationStrategyChange(input: { userId: string; strategy: AutomationStrategyDraft; expectedVersion?: number | null; auditPayload: Record<string, unknown> }): Promise<AutomationStrategyCommitResult> {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const isUpdate = input.expectedVersion != null;
+  const nextVersion = (input.expectedVersion ?? 0) + 1;
+  const action = isUpdate ? "AUTOMATION_STRATEGY_UPDATED" : "AUTOMATION_STRATEGY_CREATED";
+  const payloadJson = JSON.stringify({ ...input.auditPayload, strategyVersion: nextVersion });
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const head = await ensureAuditHead(db, input.userId);
+    if (!head) throw new Error("audit chain has multiple leaves");
+    const previousHash = head.entryHash;
+    const changedAt = new Date().toISOString();
+    const commitToken = crypto.randomUUID();
+    const entryHash = await computeAuditEntryHash(previousHash, input.userId, action, input.strategy.id, payloadJson, changedAt);
+    const auditId = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+    const mutation = isUpdate
+      ? { sql: `UPDATE automation_strategies SET connection_id=?, name=?, symbol=?, side=?, strategy_type=?, trigger_operator=?, trigger_price=?, order_type=?, limit_price=?, quantity=?, interval_seconds=?, max_orders_per_day=?, max_daily_notional=?, status='draft', execution_mode='paper', last_evaluated_at=NULL, last_triggered_at=NULL, updated_at=?, version=version+1, commit_token=? WHERE id=? AND user_id=? AND version=? AND EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.strategy.connectionId, input.strategy.name, input.strategy.symbol, input.strategy.side, input.strategy.strategyType, input.strategy.triggerOperator, input.strategy.triggerPrice, input.strategy.orderType, input.strategy.limitPrice, input.strategy.quantity, input.strategy.intervalSeconds, input.strategy.maxOrdersPerDay, input.strategy.maxDailyNotional, changedAt, commitToken, input.strategy.id, input.userId, input.expectedVersion, input.userId, previousHash, head.versionToken] }
+      : { sql: `INSERT INTO automation_strategies (id, user_id, connection_id, name, symbol, side, strategy_type, trigger_operator, trigger_price, order_type, limit_price, quantity, interval_seconds, max_orders_per_day, max_daily_notional, status, execution_mode, created_at, updated_at, version, commit_token) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', 'paper', ?, ?, 1, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND (SELECT COUNT(*) FROM automation_strategies WHERE user_id=?) < 50 ON CONFLICT(id) DO NOTHING`, params: [input.strategy.id, input.userId, input.strategy.connectionId, input.strategy.name, input.strategy.symbol, input.strategy.side, input.strategy.strategyType, input.strategy.triggerOperator, input.strategy.triggerPrice, input.strategy.orderType, input.strategy.limitPrice, input.strategy.quantity, input.strategy.intervalSeconds, input.strategy.maxOrdersPerDay, input.strategy.maxDailyNotional, changedAt, changedAt, commitToken, input.userId, previousHash, head.versionToken, input.userId] };
+    try {
+      await db.batch([
+        mutation,
+        { sql: `UPDATE audit_chain_heads SET entry_hash=?, updated_at=? WHERE user_id=? AND entry_hash=? AND updated_at=? AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)`, params: [entryHash, commitToken, input.userId, previousHash, head.versionToken, input.strategy.id, input.userId, nextVersion, commitToken] },
+        { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)`, params: [input.userId, action, input.strategy.id, payloadJson, changedAt, input.userId, entryHash, commitToken, input.strategy.id, input.userId, nextVersion, commitToken] },
+        // A lost CAS makes the scalar subquery NULL. audit_chain.user_id is NOT NULL,
+        // so both PostgreSQL and D1 roll the entire batch back, including mutation.
+        { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) VALUES (?, (SELECT ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)), ?, ?, ?, ?, ?, ?)`, params: [auditId, input.userId, input.userId, entryHash, commitToken, input.strategy.id, input.userId, nextVersion, commitToken, action, input.strategy.id, payloadJson, previousHash, entryHash, changedAt] },
+      ]);
+    } catch (error) {
+      const strategy = await getAutomationStrategy(input.userId, input.strategy.id);
+      if (isUpdate && (!strategy || strategy.version !== input.expectedVersion)) return { strategy: null, reason: "conflict" };
+      if (!isUpdate && strategy) return { strategy: null, reason: "conflict" };
+      if (!isUpdate && await countAutomationStrategies(input.userId) >= 50) return { strategy: null, reason: "quota" };
+      if (attempt === 2) throw error;
+      continue;
+    }
+    const strategy = await getAutomationStrategy(input.userId, input.strategy.id);
+    const auditCommitted = Boolean((await db.query<{ id: string }>(`SELECT id FROM audit_chain WHERE id=?`, [auditId])).rows[0]);
+    if (auditCommitted && strategy?.version === nextVersion) return { strategy, reason: null };
+    if (isUpdate && (!strategy || strategy.version !== input.expectedVersion)) return { strategy: null, reason: "conflict" };
+    if (!isUpdate && strategy) return { strategy: null, reason: "conflict" };
+    if (!isUpdate && await countAutomationStrategies(input.userId) >= 50) return { strategy: null, reason: "quota" };
+  }
+  return { strategy: null, reason: "contention" };
+}
+
+export async function commitAutomationStrategyStatus(input: { userId: string; strategyId: string; status: AutomationStrategyView["status"]; expectedVersion: number; auditPayload: Record<string, unknown> }): Promise<AutomationStrategyCommitResult> {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const action = "AUTOMATION_STRATEGY_STATUS_CHANGED";
+  const nextVersion = input.expectedVersion + 1;
+  const payloadJson = JSON.stringify({ ...input.auditPayload, strategyVersion: nextVersion });
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const head = await ensureAuditHead(db, input.userId);
+    if (!head) throw new Error("audit chain has multiple leaves");
+    const previousHash = head.entryHash;
+    const changedAt = new Date().toISOString();
+    const commitToken = crypto.randomUUID();
+    const entryHash = await computeAuditEntryHash(previousHash, input.userId, action, input.strategyId, payloadJson, changedAt);
+    const auditId = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+    try {
+      await db.batch([
+        { sql: `UPDATE automation_strategies SET status=?, updated_at=?, version=version+1, commit_token=? WHERE id=? AND user_id=? AND version=? AND EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.status, changedAt, commitToken, input.strategyId, input.userId, input.expectedVersion, input.userId, previousHash, head.versionToken] },
+        { sql: `UPDATE audit_chain_heads SET entry_hash=?, updated_at=? WHERE user_id=? AND entry_hash=? AND updated_at=? AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)`, params: [entryHash, commitToken, input.userId, previousHash, head.versionToken, input.strategyId, input.userId, nextVersion, commitToken] },
+        { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) SELECT ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)`, params: [input.userId, action, input.strategyId, payloadJson, changedAt, input.userId, entryHash, commitToken, input.strategyId, input.userId, nextVersion, commitToken] },
+        // See commitAutomationStrategyChange: this NOT NULL guard is the rollback trigger.
+        { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) VALUES (?, (SELECT ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) AND EXISTS (SELECT 1 FROM automation_strategies WHERE id=? AND user_id=? AND version=? AND commit_token=?)), ?, ?, ?, ?, ?, ?)`, params: [auditId, input.userId, input.userId, entryHash, commitToken, input.strategyId, input.userId, nextVersion, commitToken, action, input.strategyId, payloadJson, previousHash, entryHash, changedAt] },
+      ]);
+    } catch (error) {
+      const strategy = await getAutomationStrategy(input.userId, input.strategyId);
+      if (!strategy || strategy.version !== input.expectedVersion) return { strategy: null, reason: "conflict" };
+      if (attempt === 2) throw error;
+      continue;
+    }
+    const strategy = await getAutomationStrategy(input.userId, input.strategyId);
+    const auditCommitted = Boolean((await db.query<{ id: string }>(`SELECT id FROM audit_chain WHERE id=?`, [auditId])).rows[0]);
+    if (auditCommitted && strategy?.version === nextVersion) return { strategy, reason: null };
+    if (!strategy || strategy.version !== input.expectedVersion) return { strategy: null, reason: "conflict" };
+  }
+  return { strategy: null, reason: "contention" };
 }
 
 export async function getAutomationRunUsage(userId: string, strategyId: string, since: string) {
@@ -445,14 +704,105 @@ export async function getAutomationRunUsage(userId: string, strategyId: string, 
   return { orders: rows.rows.length, notional: rows.rows.reduce((sum, row) => { try { return sum + Number((JSON.parse(row.detailJson) as { notional?: number }).notional ?? 0); } catch { return sum; } }, 0) };
 }
 
-export async function recordAutomationRun(input: { strategyId: string; userId: string; status: string; observedPrice: number | null; orderId?: string | null; detail: Record<string, unknown>; triggered: boolean }) {
+export type AutomationRunView = {
+  id: string;
+  strategyId: string;
+  status: string;
+  observedPrice: number | null;
+  orderId: string | null;
+  detail: Record<string, unknown>;
+  createdAt: string;
+};
+
+export async function listAutomationRuns(userId: string, strategyId?: string | null, limit = 100): Promise<AutomationRunView[]> {
   await ensureTradingSchema();
   const db = await getAdapter();
-  const now = new Date().toISOString();
-  await db.batch([
-    { sql: `INSERT INTO automation_runs (id, strategy_id, user_id, status, observed_price, order_id, detail_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, params: [`RUN-${crypto.randomUUID()}`, input.strategyId, input.userId, input.status, input.observedPrice, input.orderId ?? null, JSON.stringify(input.detail), now] },
-    { sql: `UPDATE automation_strategies SET last_evaluated_at=?, last_triggered_at=CASE WHEN ? THEN ? ELSE last_triggered_at END, updated_at=? WHERE id=? AND user_id=?`, params: [now, input.triggered ? 1 : 0, now, now, input.strategyId, input.userId] },
-  ]);
+  const safeLimit = Math.max(1, Math.min(250, Math.trunc(limit)));
+  const filter = strategyId ? " AND strategy_id=?" : "";
+  const rows = await db.query<{ id: string; strategyId: string; status: string; observedPrice: number | null; orderId: string | null; detailJson: string; createdAt: string }>(`SELECT id, strategy_id AS "strategyId", status, observed_price AS "observedPrice", order_id AS "orderId", detail_json AS "detailJson", created_at AS "createdAt" FROM automation_runs WHERE user_id=?${filter} ORDER BY created_at DESC LIMIT ${safeLimit}`, strategyId ? [userId, strategyId] : [userId]);
+  return rows.rows.map((row) => {
+    let detail: Record<string, unknown> = {};
+    try { detail = JSON.parse(row.detailJson) as Record<string, unknown>; } catch { detail = { parseError: true }; }
+    return { id: row.id, strategyId: row.strategyId, status: row.status, observedPrice: row.observedPrice == null ? null : Number(row.observedPrice), orderId: row.orderId, detail, createdAt: row.createdAt };
+  });
+}
+
+export async function countAutomationRuns(userId: string) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const row = (await db.query<{ count: number }>(`SELECT COUNT(*) AS count FROM automation_runs WHERE user_id=?`, [userId])).rows[0];
+  return Number(row?.count ?? 0);
+}
+
+export async function getAutomationRunStats(userId: string, strategyId: string, strategyFingerprint: string) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  let row = (await db.query<{ validationCount: number; triggerCount: number; waitingCount: number }>(`SELECT validation_count AS "validationCount", trigger_count AS "triggerCount", waiting_count AS "waitingCount" FROM automation_validation_progress WHERE user_id=? AND strategy_id=? AND strategy_fingerprint=?`, [userId, strategyId, strategyFingerprint])).rows[0];
+  if (!row) {
+    const fingerprintPattern = `%"strategyFingerprint":"${strategyFingerprint}"%`;
+    await db.query(`INSERT INTO automation_validation_progress (user_id, strategy_id, strategy_fingerprint, validation_count, trigger_count, waiting_count, updated_at) SELECT ?, ?, ?, COUNT(*), COALESCE(SUM(CASE WHEN status='WOULD_SUBMIT' THEN 1 ELSE 0 END), 0), COALESCE(SUM(CASE WHEN status='CONDITION_WAITING' THEN 1 ELSE 0 END), 0), ? FROM automation_runs WHERE user_id=? AND strategy_id=? AND detail_json LIKE ? ON CONFLICT(user_id, strategy_id, strategy_fingerprint) DO NOTHING`, [userId, strategyId, strategyFingerprint, new Date().toISOString(), userId, strategyId, fingerprintPattern]);
+    row = (await db.query<{ validationCount: number; triggerCount: number; waitingCount: number }>(`SELECT validation_count AS "validationCount", trigger_count AS "triggerCount", waiting_count AS "waitingCount" FROM automation_validation_progress WHERE user_id=? AND strategy_id=? AND strategy_fingerprint=?`, [userId, strategyId, strategyFingerprint])).rows[0];
+  }
+  return { validationCount: Number(row?.validationCount ?? 0), triggerCount: Number(row?.triggerCount ?? 0), waitingCount: Number(row?.waitingCount ?? 0) };
+}
+
+export async function listAutomationRunStats(userId: string) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const rows = await db.query<{ strategyId: string; strategyFingerprint: string; validationCount: number; triggerCount: number; waitingCount: number }>(`SELECT strategy_id AS "strategyId", strategy_fingerprint AS "strategyFingerprint", validation_count AS "validationCount", trigger_count AS "triggerCount", waiting_count AS "waitingCount" FROM automation_validation_progress WHERE user_id=?`, [userId]);
+  return rows.rows.map((row) => ({ strategyId: row.strategyId, strategyFingerprint: row.strategyFingerprint, validationCount: Number(row.validationCount), triggerCount: Number(row.triggerCount), waitingCount: Number(row.waitingCount) }));
+}
+
+export async function commitAutomationEvaluation(input: {
+  userId: string;
+  strategyId: string;
+  idempotencyKey: string;
+  requestHash: string;
+  statusCode: number;
+  response: unknown;
+  run: AutomationRunView & { triggered: boolean };
+  auditPayload: Record<string, unknown>;
+}) {
+  await ensureTradingSchema();
+  const db = await getAdapter();
+  const responseJson = JSON.stringify(input.response);
+  const detailJson = JSON.stringify(input.run.detail);
+  const auditPayloadJson = JSON.stringify(input.auditPayload);
+  const strategyFingerprint = typeof input.run.detail.strategyFingerprint === "string" ? input.run.detail.strategyFingerprint : "";
+  if (!/^[a-f0-9]{64}$/.test(strategyFingerprint)) throw new Error("automation evaluation requires a valid strategy fingerprint");
+  await getAutomationRunStats(input.userId, input.strategyId, strategyFingerprint);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const head = await ensureAuditHead(db, input.userId);
+    if (!head) throw new Error("audit chain has multiple leaves");
+    const auditCreatedAt = new Date().toISOString();
+    const previousHash = head.entryHash;
+    const commitToken = crypto.randomUUID();
+    const entryHash = await computeAuditEntryHash(previousHash, input.userId, "AUTOMATION_SCENARIO_EVALUATED", input.strategyId, auditPayloadJson, auditCreatedAt);
+    const auditId = `AUD-${Date.now()}-${crypto.randomUUID()}`;
+    try {
+      await db.batch([
+        { sql: `UPDATE audit_chain_heads SET entry_hash=?, updated_at=? WHERE user_id=? AND entry_hash=? AND updated_at=?`, params: [entryHash, commitToken, input.userId, previousHash, head.versionToken] },
+        { sql: `INSERT INTO order_idempotency (user_id, idempotency_key, request_hash, status_code, response_json, created_at) SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.userId, input.idempotencyKey, input.requestHash, input.statusCode, responseJson, input.run.createdAt, input.userId, entryHash, commitToken] },
+        { sql: `INSERT INTO automation_runs (id, strategy_id, user_id, status, observed_price, order_id, detail_json, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.run.id, input.strategyId, input.userId, input.run.status, input.run.observedPrice, input.run.orderId, detailJson, input.run.createdAt, input.userId, entryHash, commitToken] },
+        { sql: `UPDATE automation_strategies SET last_evaluated_at=?, last_triggered_at=CASE WHEN ? THEN ? ELSE last_triggered_at END WHERE id=? AND user_id=? AND EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.run.createdAt, input.run.triggered ? 1 : 0, input.run.createdAt, input.strategyId, input.userId, input.userId, entryHash, commitToken] },
+        { sql: `INSERT INTO automation_validation_progress (user_id, strategy_id, strategy_fingerprint, validation_count, trigger_count, waiting_count, updated_at) SELECT ?, ?, ?, 1, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?) ON CONFLICT(user_id, strategy_id, strategy_fingerprint) DO UPDATE SET validation_count=automation_validation_progress.validation_count+1, trigger_count=automation_validation_progress.trigger_count+excluded.trigger_count, waiting_count=automation_validation_progress.waiting_count+excluded.waiting_count, updated_at=excluded.updated_at`, params: [input.userId, input.strategyId, strategyFingerprint, input.run.status === "WOULD_SUBMIT" ? 1 : 0, input.run.status === "CONDITION_WAITING" ? 1 : 0, input.run.createdAt, input.userId, entryHash, commitToken] },
+        { sql: `INSERT INTO audit_log (user_id, action, entity_id, payload_json, created_at) SELECT ?, 'AUTOMATION_SCENARIO_EVALUATED', ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [input.userId, input.strategyId, auditPayloadJson, auditCreatedAt, input.userId, entryHash, commitToken] },
+        { sql: `INSERT INTO audit_chain (id, user_id, action, entity_id, payload_json, previous_hash, entry_hash, created_at) SELECT ?, ?, 'AUTOMATION_SCENARIO_EVALUATED', ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM audit_chain_heads WHERE user_id=? AND entry_hash=? AND updated_at=?)`, params: [auditId, input.userId, input.strategyId, auditPayloadJson, previousHash, entryHash, auditCreatedAt, input.userId, entryHash, commitToken] },
+      ]);
+      const stored = (await db.query<{ requestHash: string; statusCode: number; responseJson: string }>(`SELECT request_hash AS "requestHash", status_code AS "statusCode", response_json AS "responseJson" FROM order_idempotency WHERE user_id=? AND idempotency_key=?`, [input.userId, input.idempotencyKey])).rows[0] ?? null;
+      if (stored) {
+        const created = Boolean((await db.query<{ id: string }>(`SELECT id FROM automation_runs WHERE id=? AND user_id=?`, [input.run.id, input.userId])).rows[0]);
+        return created ? { created: true as const, replay: null } : { created: false as const, replay: stored };
+      }
+      if (attempt === 2) throw new Error("automation audit head changed repeatedly");
+    } catch (error) {
+      const replay = (await db.query<{ requestHash: string; statusCode: number; responseJson: string }>(`SELECT request_hash AS "requestHash", status_code AS "statusCode", response_json AS "responseJson" FROM order_idempotency WHERE user_id=? AND idempotency_key=?`, [input.userId, input.idempotencyKey])).rows[0] ?? null;
+      if (replay) return { created: false as const, replay };
+      if (attempt === 2) throw error;
+    }
+  }
+  throw new Error("automation evaluation could not be committed");
 }
 
 export async function consumeBrokerRateLimit(provider: string, connectionId: string, rateGroup: string, limit: number, windowMs = 1000, now = Date.now()) {

@@ -1,15 +1,14 @@
-import { cancelPaperOrder, checkOrderRateLimit, getHydratedPaperRuntime, submitPaperOrder, withTradingMutationLock } from "../../../engine/apiRuntime";
+import { cancelPaperOrder, checkOrderRateLimit, getHydratedPaperRuntime, paperEngineWritesAvailable, submitPaperOrder, withPaperEngineMutationLock } from "../../../engine/apiRuntime";
 import type { OrderType, Side, TimeInForce } from "../../../engine/matchingEngine";
 import { instrumentFor } from "../../../engine/instrumentMaster";
+import { hashPaperOrderIntent, paperOrderIdFor, type PaperOrderIntent } from "../../../engine/paperOrderIdentity";
 import { getChatGPTUser } from "../../chatgpt-auth";
 import { addAudit, ensurePaperUser, getIdempotencyRecord, getPaperAccount, listUserTradingState, ownerForOrder, preTradeRiskCheck, saveExecution, saveIdempotencyRecord, savePaperOrder } from "../../../db/trading";
 
 export const dynamic = "force-dynamic";
 
 type OrderPayload = {
-  id?: string;
   symbol?: string;
-  participantId?: string;
   side?: Side;
   type?: OrderType;
   timeInForce?: TimeInForce;
@@ -46,6 +45,7 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  if (!paperEngineWritesAvailable()) return Response.json({ error: "paper matching writes require the serialized PostgreSQL runtime" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const { participantId } = await ensurePaperUser(user);
   const rateLimit = checkOrderRateLimit(user.userId);
   if (!rateLimit.allowed) return Response.json({ error: "order rate limit exceeded", retryAfterSeconds: rateLimit.retryAfterSeconds }, { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds), "Cache-Control": "no-store" } });
@@ -66,25 +66,29 @@ export async function POST(request: Request) {
   if (payload.timeInForce !== undefined && !isTif(payload.timeInForce)) return Response.json({ error: "invalid timeInForce" }, { status: 400 });
   if (!Number.isSafeInteger(payload.quantity) || (payload.quantity ?? 0) <= 0) return Response.json({ error: "quantity must be a positive integer" }, { status: 400 });
   const quantity = payload.quantity as number;
-  const normalizedOrder = {
-    id: payload.id?.trim() || `API-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+  const intent: PaperOrderIntent = {
     symbol,
-    participantId,
     side: payload.side,
     type: payload.type,
     timeInForce: payload.type === "MARKET" ? "IOC" : payload.timeInForce ?? "GTC",
     price: payload.type === "MARKET" || payload.type === "MIDPOINT" ? null : payload.price ?? null,
     stopPrice: payload.type === "STOP_LIMIT" ? payload.stopPrice ?? null : null,
     quantity,
-  } as const;
-  const requestHash = await sha256Hex(JSON.stringify(normalizedOrder));
+  };
+  const requestHash = await hashPaperOrderIntent(intent);
+  const normalizedOrder = { id: await paperOrderIdFor(user.userId, idempotencyKey), participantId, ...intent } as const;
 
-  return withTradingMutationLock(async () => {
+  return withPaperEngineMutationLock(async () => {
     const runtime = await getHydratedPaperRuntime();
     const replay = await getIdempotencyRecord(user.userId, idempotencyKey);
     if (replay) {
       if (replay.requestHash !== requestHash) return Response.json({ error: "idempotency key was already used with a different order" }, { status: 409 });
       return Response.json(JSON.parse(replay.responseJson), { status: Number(replay.statusCode), headers: { "Cache-Control": "no-store", "X-Idempotent-Replay": "true" } });
+    }
+    if (await ownerForOrder(normalizedOrder.id)) {
+      const body = { error: "derived order id already exists without an idempotency record" };
+      await saveIdempotencyRecord(user.userId, idempotencyKey, requestHash, 409, body);
+      return Response.json(body, { status: 409, headers: { "Cache-Control": "no-store" } });
     }
     if (runtime.venueControl?.haltMode !== "OPEN") {
       const body = { error: runtime.venueControl?.haltMode === "FULL_STOP" ? "venue is fully halted" : "venue accepts cancellations only", venueControl: runtime.venueControl };
@@ -106,7 +110,8 @@ export async function POST(request: Request) {
         const order = runtime.engine.getOrder(orderId);
         if (!order) continue;
         const owner = await ownerForOrder(orderId);
-        await savePaperOrder(owner?.userId ?? user.userId, order);
+        if (!owner) throw new Error("paper order owner is missing during execution persistence");
+        await savePaperOrder(owner.userId, order);
       }
       await saveExecution(execution);
     }
@@ -121,18 +126,14 @@ export async function POST(request: Request) {
   });
 }
 
-async function sha256Hex(value: string) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
 export async function DELETE() {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  if (!paperEngineWritesAvailable()) return Response.json({ error: "paper matching writes require the serialized PostgreSQL runtime" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const rateLimit = checkOrderRateLimit(user.userId);
   if (!rateLimit.allowed) return Response.json({ error: "order rate limit exceeded" }, { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } });
   const { participantId } = await ensurePaperUser(user);
-  return withTradingMutationLock(async () => {
+  return withPaperEngineMutationLock(async () => {
     const runtime = await getHydratedPaperRuntime();
     if (runtime.venueControl?.haltMode === "FULL_STOP") return Response.json({ error: "venue is fully halted; cancellation is disabled" }, { status: 423 });
     const cancellable = [...runtime.orders.values()].filter((order) => order.participantId === participantId && (order.status === "OPEN" || order.status === "PARTIAL" || order.status === "PENDING_TRIGGER"));

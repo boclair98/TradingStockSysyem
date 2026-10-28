@@ -22,7 +22,7 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
   const userId = requestHeaders.get(USER_ID_HEADER);
   const email = requestHeaders.get(USER_EMAIL_HEADER);
-  if ((!userId || !email) && process.env.SITE_PROVIDER === "coders") {
+  if (process.env.SITE_PROVIDER === "coders") {
     const codersUserId = requestHeaders.get("x-coders-user");
     if (!codersUserId) return null;
     const shortId = codersUserId.slice(0, 8);

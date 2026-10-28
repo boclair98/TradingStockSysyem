@@ -12,9 +12,12 @@ services:
       SITE_PROVIDER: coders
       SITE_URL: https://tradingstocksysyem.coders.kr/
       LIVE_TRADING_ENABLED: "false"
+      LIVE_ORDER_ROUTING_RELEASED: "false"
       LIVE_TRADING_EGRESS_READY: "false"
       LIVE_MARKET_ENABLED: "false"
       TRADING_ENVIRONMENT: member_certification
+      CERTIFICATION_GATEWAY_ENABLED: "false"
+      MATCHING_ENGINE_SINGLE_WRITER: "false"
   db:
     type: postgres
     size: 1Gi

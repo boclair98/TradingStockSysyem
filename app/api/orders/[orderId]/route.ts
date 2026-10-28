@@ -1,15 +1,16 @@
-import { cancelPaperOrder, checkOrderRateLimit, getHydratedPaperRuntime, replacePaperOrder, withTradingMutationLock } from "../../../../engine/apiRuntime";
+import { cancelPaperOrder, checkOrderRateLimit, getHydratedPaperRuntime, paperEngineWritesAvailable, replacePaperOrder, withPaperEngineMutationLock } from "../../../../engine/apiRuntime";
 import { getChatGPTUser } from "../../../chatgpt-auth";
-import { addAudit, ensurePaperUser, ownerForOrder, saveExecution, savePaperOrder } from "../../../../db/trading";
+import { addAudit, ensurePaperUser, ownerForOrder, preTradeReplaceRiskCheck, saveExecution, savePaperOrder } from "../../../../db/trading";
 
 export async function DELETE(request: Request, { params }: { params: Promise<{ orderId: string }> }) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  if (!paperEngineWritesAvailable()) return Response.json({ error: "paper matching writes require the serialized PostgreSQL runtime" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const rateLimit = checkOrderRateLimit(user.userId);
   if (!rateLimit.allowed) return Response.json({ error: "order rate limit exceeded" }, { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } });
   const { participantId } = await ensurePaperUser(user);
   const { orderId } = await params;
-  return withTradingMutationLock(async () => {
+  return withPaperEngineMutationLock(async () => {
     const runtime = await getHydratedPaperRuntime();
     if (runtime.venueControl?.haltMode === "FULL_STOP") return Response.json({ error: "venue is fully halted; cancellation is disabled" }, { status: 423 });
     const result = cancelPaperOrder(orderId, participantId);
@@ -25,6 +26,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ o
 export async function POST(request: Request, { params }: { params: Promise<{ orderId: string }> }) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "sign in required" }, { status: 401 });
+  if (!paperEngineWritesAvailable()) return Response.json({ error: "paper matching writes require the serialized PostgreSQL runtime" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const rateLimit = checkOrderRateLimit(user.userId);
   if (!rateLimit.allowed) return Response.json({ error: "order rate limit exceeded" }, { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } });
   const { participantId } = await ensurePaperUser(user);
@@ -39,9 +41,24 @@ export async function POST(request: Request, { params }: { params: Promise<{ ord
     return Response.json({ error: "quantity must be a positive integer" }, { status: 400 });
   }
   const quantity = payload.quantity as number;
-  return withTradingMutationLock(async () => {
+  return withPaperEngineMutationLock(async () => {
     const runtime = await getHydratedPaperRuntime();
     if (runtime.venueControl?.haltMode !== "OPEN") return Response.json({ error: "venue does not accept order replacements while halted" }, { status: 423 });
+    const current = runtime.engine.getOrder(orderId);
+    const owner = await ownerForOrder(orderId);
+    if (!current || !owner || owner.userId !== user.userId || current.participantId !== participantId) {
+      return Response.json({ error: "order not found" }, { status: 404, headers: { "Cache-Control": "no-store" } });
+    }
+    const preview = runtime.engine.previewReplace(orderId, quantity, payload.price, participantId);
+    if (!preview.replaceable) {
+      await addAudit(user.userId, "ORDER_REPLACE_REJECTED", orderId, { desiredQuantity: quantity, reason: preview.reason ?? null });
+      return Response.json({ error: preview.reason ?? "order is not replaceable" }, { status: 422, headers: { "Cache-Control": "no-store" } });
+    }
+    const riskError = await preTradeReplaceRiskCheck(user.userId, current, quantity, preview.referencePrice);
+    if (riskError) {
+      await addAudit(user.userId, "ORDER_REPLACE_REJECTED", orderId, { desiredQuantity: quantity, replacementQuantity: preview.replacementQuantity, referencePrice: preview.referencePrice, reason: riskError });
+      return Response.json({ error: riskError }, { status: 422, headers: { "Cache-Control": "no-store" } });
+    }
     const result = replacePaperOrder(orderId, participantId, quantity, payload.price);
     const oldOrder = runtime.engine.getOrder(orderId);
     if (oldOrder) await savePaperOrder(user.userId, oldOrder);
@@ -54,7 +71,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ ord
       }
       await saveExecution(execution);
     }
-    await addAudit(user.userId, result.accepted ? "ORDER_REPLACED" : "ORDER_REPLACE_REJECTED", orderId, { quantity, price: payload.price ?? null, reason: result.reason ?? null });
+    await addAudit(user.userId, result.accepted ? "ORDER_REPLACED" : "ORDER_REPLACE_REJECTED", orderId, { desiredQuantity: quantity, replacementQuantity: preview.replacementQuantity, price: payload.price ?? null, referencePrice: preview.referencePrice, reason: result.reason ?? null });
     return Response.json({ venue: "NEXTRADE", environment: "member_certification", ...result }, {
       status: result.accepted ? 200 : 422,
       headers: { "Cache-Control": "no-store" },

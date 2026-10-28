@@ -1,5 +1,5 @@
 import { consumeBrokerRateLimit, consumeGatewaySequence, ensureGatewayMember, ensureMemberGatewaySession, gatewayClientOrderExists, nextGatewayOutboundSequence, ownerForOrder, recordDropCopy, recordGatewayMessage, saveExecution, savePaperOrder } from "../../../../db/trading";
-import { getHydratedPaperRuntime, submitPaperOrder, withTradingMutationLock } from "../../../../engine/apiRuntime";
+import { getHydratedPaperRuntime, submitPaperOrder, withPaperEngineMutationLock } from "../../../../engine/apiRuntime";
 import { instrumentFor } from "../../../../engine/instrumentMaster";
 import { executionReport, validateMemberMessage, verifyGatewaySignature, type MemberOrderMessage } from "../../../../engine/memberGateway";
 
@@ -10,6 +10,7 @@ function gatewayKeys() {
 }
 
 export async function POST(request: Request) {
+  if (process.env.CERTIFICATION_GATEWAY_ENABLED !== "true" || !process.env.DATABASE_URL || process.env.MATCHING_ENGINE_SINGLE_WRITER !== "true") return Response.json({ rejectCode: "GATEWAY_NOT_RELEASED", message: "certification order entry requires an approved single-writer PostgreSQL runtime" }, { status: 503, headers: { "Cache-Control": "no-store" } });
   const receivedAt = new Date().toISOString();
   const started = performance.now();
   let message: Partial<MemberOrderMessage>;
@@ -35,7 +36,8 @@ export async function POST(request: Request) {
   if (instrument.symbol !== validation.normalized.symbol) return Response.json({ rejectCode: "MESSAGE_INVALID", message: "instrument is not admitted to the venue" }, { status: 422 });
   const member = await ensureGatewayMember(memberId);
 
-  return withTradingMutationLock(async () => {
+  return withPaperEngineMutationLock(async () => {
+    if (await gatewayClientOrderExists(memberId, validation.normalized.clientOrderId)) return Response.json({ rejectCode: "DUPLICATE_CLIENT_ORDER_ID", message: "client order id has already been accepted for this member" }, { status: 409 });
     const runtime = await getHydratedPaperRuntime();
     if (runtime.venueControl?.haltMode !== "OPEN") return Response.json({ rejectCode: "VENUE_HALTED", venueControl: runtime.venueControl }, { status: 423 });
     const input = validation.normalized;

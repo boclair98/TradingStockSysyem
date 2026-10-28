@@ -1,0 +1,1 @@
+CREATE INDEX `idx_audit_chain_user_previous_hash` ON `audit_chain` (`user_id`,`previous_hash`);
